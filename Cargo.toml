@@ -4,6 +4,22 @@ version = "0.1.0"
 edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
+# --- Определение Библиотеки (Общий код) ---
+# Имя библиотеки будет derived из [package] name: zero_kelvin_stazis
+# В коде бинарников ты будешь использовать: use zero_kelvin_stazis::engine;
+[lib]
+path = "src/lib.rs"
+
+# --- Определение Бинарников (Точки входа) ---
+
+[[bin]]
+name = "zks-rs"
+path = "src/bin/zks-rs.rs"
+
+[[bin]]
+name = "squash_manager-rs"
+path = "src/bin/squash_manager-rs.rs"
+
 [dependencies]
 # 1. Парсинг аргументов (замена argparse в fish)
 # features = ["derive"] позволяет описывать флаги через структуры (struct)
@@ -18,7 +34,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 
 # 4. Прогресс-бары (замена pv и rclone -P)
-# Красивые полоски загрузки прямо в консоли
+# Красивые прогресс-бары прямо в терминале
 indicatif = "0.18"
 
 # 5. Поиск бинарников (замена 'type -q' или 'which')
@@ -34,6 +50,6 @@ log = "0.4"
 env_logger = "0.11"
 
 [dev-dependencies]
-# Инструменты для ТЕСТОВ (то, что мы обсуждали)
-assert_cmd = "2.1"  # Позволяет запускать твой бинарник как процесс и проверять вывод
+# Инструменты для ТЕСТОВ
+assert_cmd = "2.1"  # Позволяет запускать бинарник как процесс и проверять вывод
 predicates = "3.1"  # Помогает сравнивать строки/файлы в тестах
