@@ -1,0 +1,39 @@
+[package]
+name = "zero-kelvin-stazis"
+version = "0.1.0"
+edition = "2024"
+description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
+
+[dependencies]
+# 1. Парсинг аргументов (замена argparse в fish)
+# features = ["derive"] позволяет описывать флаги через структуры (struct)
+clap = { version = "4.5", features = ["derive"] }
+
+# 2. Обработка ошибок
+# Позволяет писать Result<?> и использовать оператор '?' вместо кучи if/else
+anyhow = "1.0"
+
+# 3. Работа с YAML (для list.yaml)
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+# 4. Прогресс-бары (замена pv и rclone -P)
+# Красивые полоски загрузки прямо в консоли
+indicatif = "0.18"
+
+# 5. Поиск бинарников (замена 'type -q' или 'which')
+# Чтобы проверить, установлен ли mksquashfs или rclone
+which = "8.0"
+
+# 6. Работа с временными файлами
+# Создает папки в /tmp или /var/tmp и САМА удаляет их при выходе
+tempfile = "3.24"
+
+# 7. Логирование (вместо echo)
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+# Инструменты для ТЕСТОВ (то, что мы обсуждали)
+assert_cmd = "2.1"  # Позволяет запускать твой бинарник как процесс и проверять вывод
+predicates = "3.1"  # Помогает сравнивать строки/файлы в тестах
