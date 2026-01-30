@@ -1,6 +1,9 @@
 #!/usr/bin/env bats
 
 setup() {
+    load 'test_helper/bats-support/load'
+    load 'test_helper/bats-assert/load'
+
     export TEST_DIR=$(mktemp -d -t zks-create.XXXXXX)
     export SRC="$TEST_DIR/src"
     mkdir -p "$SRC"
@@ -19,16 +22,17 @@ teardown() {
 
 @test "Smoke: Успешное создание обычного архива" {
     run ./target/debug/squash_manager-rs create "$SRC" "$TEST_DIR/out.sqfs" --no-progress
-    [ "$status" -eq 0 ]
-    [ -f "$TEST_DIR/out.sqfs" ]
+    assert_success
+    assert_file_exists "$TEST_DIR/out.sqfs"
 }
 
 @test "Logic: Ошибка при отсутствии входной папки" {
     run ./target/debug/squash_manager-rs create "/bad/path" "$TEST_DIR/out.sqfs"
-    [ "$status" -ne 0 ]
+    assert_failure
 }
 
 @test "Logic: Флаг сжатия принимается" {
     run ./target/debug/squash_manager-rs create "$SRC" "$TEST_DIR/comp.sqfs" -c 1 --no-progress
-    [ "$status" -eq 0 ]
+    assert_success
+    assert_file_exists "$TEST_DIR/comp.sqfs"
 }
