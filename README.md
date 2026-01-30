@@ -1,2 +1,2 @@
 - Work in progress.
-- You can see the [GEMINI.md](GEMINI.md) file to get more details.
+- You can see the [GEMINI.md](GEMINI.md) and [TODO.md](TODO.md) file to get more details.
