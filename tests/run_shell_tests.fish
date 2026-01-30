@@ -59,5 +59,5 @@ bats tests/01_create.bats
 # Тест 2 (C SUDO) - ВНИМАНИЕ!
 # Sudo по умолчанию стирает переменные окружения ради безопасности.
 # Нужно явно прокинуть их внутрь.
-#sudo --preserve-env=ZKS_PROJECT_ROOT,ZKS_BIN bats tests/02_mount.bats
+#and sudo --preserve-env=ZKS_PROJECT_ROOT,ZKS_SQM_BIN bats tests/02_mount.bats
 
