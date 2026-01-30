@@ -6,7 +6,7 @@ depends=(
     'squashfs-tools-ng' # <-- ВОТ ТУТ живет tar2sqfs
     'cryptsetup'        # LUKS
     'rclone'            # Rclone
-    'util-linux'      # mount/umount (обычно не пишут, т.к. это база системы, но можно)
+    'util-linux'    # mount/umount (обычно не пишут, т.к. это база системы, но можно написать)
 )
 
 # 2. СБОРКА (Build time)
