@@ -1,11 +1,29 @@
-# То, что нужно для КОМПИЛЯЦИИ (cargo build)
+# 1. ЗАВИСИМОСТИ (Runtime) - Чтобы программа работала
+depends=(
+    'gcc-libs'          # Нужен для работы бинарника Rust
+    'glibc'             # Нужен для системных вызовов (стандарт)
+    'squashfs-tools'    # mksquashfs, unsquashfs
+    'squashfs-tools-ng' # <-- ВОТ ТУТ живет tar2sqfs
+    'cryptsetup'        # LUKS
+    'rclone'            # Rclone
+    'util-linux'      # mount/umount (обычно не пишут, т.к. это база системы, но можно)
+)
+
+# 2. СБОРКА (Build time)
 makedepends=('rust' 'git')
 
-# То, что нужно только для ТЕСТОВ (функция check)
-# fish - чтобы запустить .fish скрипт
-# bats - чтобы прогнать тесты
-# just - чтобы запустить команду 'just test'
+# 3. ТЕСТЫ (Check time)
+# Убрали библиотеки bats в сабмодулях тут не указывются
+# Остались только инструменты запуска.
 checkdepends=('fish' 'bats' 'just')
+
+# 4. ПОДГОТОВКА (Важно для сабмодулей!)
+prepare() {
+    cd "$srcdir/$pkgname"
+    # Если вы собираете из git-исходников, нужно подтянуть сабмодули,
+    # иначе тесты упадут с ошибкой "load failed"
+    git submodule update --init --recursive
+}
 
 check() {
     cd "$srcdir/$pkgname"
