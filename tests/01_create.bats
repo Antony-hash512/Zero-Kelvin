@@ -20,18 +20,18 @@ teardown() {
 }
 
 @test "Smoke: Успешное создание обычного архива" {
-    run ./target/debug/squash_manager-rs create "$SRC" "$TEST_DIR/out.sqfs" --no-progress
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/out.sqfs" --no-progress
     assert_success
     [ -f "$TEST_DIR/out.sqfs" ]
 }
 
 @test "Logic: Ошибка при отсутствии входной папки" {
-    run ./target/debug/squash_manager-rs create "/bad/path" "$TEST_DIR/out.sqfs"
+    run $ZKS_SQM_BIN create "/bad/path" "$TEST_DIR/out.sqfs"
     assert_failure
 }
 
 @test "Logic: Флаг сжатия принимается" {
-    run ./target/debug/squash_manager-rs create "$SRC" "$TEST_DIR/comp.sqfs" -c 1 --no-progress
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/comp.sqfs" -c 1 --no-progress
     assert_success
     [ -f "$TEST_DIR/comp.sqfs" ]
 }

@@ -51,10 +51,12 @@ fn main() -> Result<()> {
 pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<()> {
     match args.command {
         Commands::Create { input_path, output_path, encrypt, compression, no_progress } => {
-            // Logic to be implemented
             if encrypt {
-                // Should return error as per requirements
                 return Err(anyhow!("Encryption support will be added in Stage 4"));
+            }
+
+            if !input_path.exists() {
+                return Err(anyhow!("Input path does not exist: {:?}", input_path));
             }
 
             let mut cmd_args = vec![
@@ -73,7 +75,12 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             let comp_level_str = compression.to_string();
             cmd_args.push(&comp_level_str);
 
-            executor.run("mksquashfs", &cmd_args)?;
+            let output = executor.run("mksquashfs", &cmd_args)?;
+            
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("mksquashfs failed: {}", stderr));
+            }
 
             Ok(())
         },

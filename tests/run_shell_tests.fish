@@ -16,7 +16,7 @@ set -l script_dir (dirname (status filename))
 
 # Вычисляем корень проекта (абсолютный путь)
 # realpath уберет все ".." и симлинки
-set -x ZKS_PROJECT_ROOT (realpath $script_dir)
+set -x ZKS_PROJECT_ROOT (realpath $script_dir/..)
 
 # Сразу вычисляем путь к бинарнику, чтобы не дублировать логику в bats
 set -x ZKS_SQM_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/squash_manager-rs"
