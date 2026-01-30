@@ -49,6 +49,12 @@ impl MockSystem {
             args: args.iter().map(|s| s.to_string()).collect(),
         }
     }
+    pub fn verify_complete(&self) {
+        let queues = self.expectations.lock().unwrap();
+        if !queues.is_empty() {
+             panic!("MockSystem: Not all expectations were met. Remaining: {:?}", *queues);
+        }
+    }
 }
 
 pub struct MockExpectationBuilder {
