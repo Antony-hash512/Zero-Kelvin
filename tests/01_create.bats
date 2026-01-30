@@ -27,7 +27,9 @@ teardown() {
 
 @test "Logic: Ошибка при отсутствии входной папки" {
     run $ZKS_SQM_BIN create "/bad/path" "$TEST_DIR/out.sqfs"
+    echo "DEBUG output: [$output]" >&3
     assert_failure
+    assert_output --partial "Input path does not exist"
 }
 
 @test "Logic: Флаг сжатия принимается" {
