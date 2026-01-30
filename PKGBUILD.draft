@@ -1,0 +1,14 @@
+# То, что нужно для КОМПИЛЯЦИИ (cargo build)
+makedepends=('rust' 'git')
+
+# То, что нужно только для ТЕСТОВ (функция check)
+# fish - чтобы запустить .fish скрипт
+# bats - чтобы прогнать тесты
+# just - чтобы запустить команду 'just test'
+checkdepends=('fish' 'bats' 'just')
+
+check() {
+    cd "$srcdir/$pkgname"
+    cargo check
+    just build-and-shell-tests
+}
