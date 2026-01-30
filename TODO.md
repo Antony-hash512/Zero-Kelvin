@@ -14,12 +14,12 @@
     - [x] Настроить инициализацию `env_logger` в точках входа.
 
 ## Этап 2: Ядро (Core Library)
-- [ ] **Command Executor (Mocking):**
-    - [ ] Реализовать трейт `CommandExecutor` и структуру `RealSystem` (реальный вызов `std::process::Command`).
-    - [ ] Реализовать `DryRun` или `MockSystem` для тестов (запись команд в буфер).
-- [ ] **Манифест (Manifest):**
-    - [ ] Реализовать структуры `Manifest` и `FileEntry` (используя Serde).
-    - [ ] Реализовать сериализацию/десериализацию и парсинг `list.yaml` (включая legacy).
+- [x] **Command Executor (Mocking):**
+    - [x] Реализовать трейт `CommandExecutor` и структуру `RealSystem` (реальный вызов `std::process::Command`).
+    - [x] Реализовать `DryRun` или `MockSystem` для тестов (запись команд в буфер).
+- [x] **Манифест (Manifest):**
+    - [x] Реализовать структуры `Manifest` и `FileEntry` (используя Serde).
+    - [x] Реализовать сериализацию/десериализацию и парсинг `list.yaml` (включая legacy).
 
 ## Этап 3: Squash Manager (Фундамент)
 - [ ] **Команда `create`:**
