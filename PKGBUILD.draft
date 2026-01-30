@@ -10,5 +10,5 @@ checkdepends=('fish' 'bats' 'just')
 check() {
     cd "$srcdir/$pkgname"
     cargo check
-    just build-and-shell-tests
+    just build-and-shell-tests-release
 }
