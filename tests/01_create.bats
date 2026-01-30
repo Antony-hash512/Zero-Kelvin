@@ -35,5 +35,10 @@ teardown() {
 @test "Logic: Флаг сжатия принимается" {
     run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/comp.sqfs" -c 1 --no-progress
     assert_success
+    run bash -c "unsquashfs -s $TEST_DIR/comp.sqfs | grep compression-level"
+    echo "DEBUG output: [$output]" >&3
+    assert_output --partial "compression-level 1"
+    run file "$TEST_DIR/comp.sqfs"
+    echo "DEBUG output: [$output]" >&3
     [ -f "$TEST_DIR/comp.sqfs" ]
 }

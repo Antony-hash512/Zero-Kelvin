@@ -60,3 +60,4 @@ bats tests/01_create.bats
 # Sudo по умолчанию стирает переменные окружения ради безопасности.
 # Нужно явно прокинуть их внутрь.
 #sudo --preserve-env=ZKS_PROJECT_ROOT,ZKS_BIN bats tests/02_mount.bats
+
