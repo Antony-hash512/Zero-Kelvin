@@ -2,6 +2,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
+use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 
 #[derive(Parser, Debug)]
 #[command(name = "squash_manager", about = "Manages SquashFS archives", version)]
@@ -19,7 +20,7 @@ pub enum Commands {
         output_path: Option<PathBuf>,
         #[arg(short, long)]
         encrypt: bool,
-        #[arg(short, long, default_value_t = 19)]
+        #[arg(short, long, default_value_t = DEFAULT_ZSTD_COMPRESSION)]
         compression: u32,
         #[arg(long)]
         no_progress: bool,
@@ -110,7 +111,7 @@ mod tests {
             "output.sqfs", 
             "-no-progress",
             "-comp", "zstd", 
-            "-Xcompression-level", "19"
+            "-Xcompression-level", &DEFAULT_ZSTD_COMPRESSION.to_string()
         ]).returns(Output {
             status: std::process::ExitStatus::from_raw(0),
             stdout: vec![],
@@ -122,7 +123,7 @@ mod tests {
                 input_path: PathBuf::from("input_dir"),
                 output_path: Some(PathBuf::from("output.sqfs")),
                 encrypt: false,
-                compression: 19,
+                compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
             }
         };
@@ -140,7 +141,7 @@ mod tests {
                 input_path: PathBuf::from("input_dir"),
                 output_path: Some(PathBuf::from("output.sqfs")),
                 encrypt: true,
-                compression: 19,
+                compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: false,
             }
         };
