@@ -114,12 +114,17 @@ mod tests {
 
     #[test]
     fn test_create_plain_archive() {
+        // Create a temp directory so input_path.exists() passes
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_path = temp_dir.path().to_path_buf();
+        let input_path_str = input_path.to_str().unwrap();
+
         let mut mock = MockSystem::new();
-        // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level 15
+        // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level 19
         mock.expect(
             "mksquashfs",
             &[
-                "input_dir",
+                input_path_str,
                 "output.sqfs",
                 "-no-progress",
                 "-comp",
@@ -136,7 +141,7 @@ mod tests {
 
         let args = SquashManagerArgs {
             command: Commands::Create {
-                input_path: PathBuf::from("input_dir"),
+                input_path: input_path,
                 output_path: Some(PathBuf::from("output.sqfs")),
                 encrypt: false,
                 compression: DEFAULT_ZSTD_COMPRESSION,
