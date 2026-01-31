@@ -104,7 +104,18 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
     use std::process::Output;
-    use zero_kelvin_stazis::executor::MockSystem;
+    // use zero_kelvin_stazis::executor::MockCommandExecutor; // Not visible/available
+    use mockall::predicate::*;
+    use mockall::mock;
+
+    // Define the mock locally for the binary tests
+    mock! {
+        pub CommandExecutor {}
+        impl CommandExecutor for CommandExecutor {
+            fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
+        }
+    }
+
 
     #[test]
     fn verify_cli() {
@@ -118,26 +129,28 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let input_path = temp_dir.path().to_path_buf();
         let input_path_str = input_path.to_str().unwrap();
+        let input_path_check = input_path_str.to_string();
 
-        let mut mock = MockSystem::new();
+        let mut mock = MockCommandExecutor::new();
         // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level <DEFAULT_ZSTD_COMPRESSION>
-        mock.expect(
-            "mksquashfs",
-            &[
-                input_path_str,
-                "output.sqfs",
-                "-no-progress",
-                "-comp",
-                "zstd",
-                "-Xcompression-level",
-                &DEFAULT_ZSTD_COMPRESSION.to_string(),
-            ],
-        )
-        .returns(Output {
-            status: std::process::ExitStatus::from_raw(0),
-            stdout: vec![],
-            stderr: vec![],
-        });
+        mock.expect_run()
+            .withf(move |program, args| {
+                 program == "mksquashfs" &&
+                 args.len() == 7 &&
+                 args[0] == input_path_check &&
+                 args[1] == "output.sqfs" &&
+                 args[2] == "-no-progress" &&
+                 args[3] == "-comp" &&
+                 args[4] == "zstd" &&
+                 args[5] == "-Xcompression-level" &&
+                 args[6] == DEFAULT_ZSTD_COMPRESSION.to_string()
+            })
+            .times(1)
+            .returning(|_, _| Ok(Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            }));
 
         let args = SquashManagerArgs {
             command: Commands::Create {
@@ -150,13 +163,11 @@ mod tests {
         };
 
         run(args, &mock).unwrap();
-
-        mock.verify_complete();
     }
 
     #[test]
     fn test_create_with_encryption_flag_fails() {
-        let mock = MockSystem::new();
+        let mock = MockCommandExecutor::new();
         let args = SquashManagerArgs {
             command: Commands::Create {
                 input_path: PathBuf::from("input_dir"),
