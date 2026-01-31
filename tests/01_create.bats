@@ -40,3 +40,10 @@ teardown() {
     assert_output --partial "compression-level 1"
 }
 
+@test "Logic:Сжатие по умолчанию" {
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/default.sqfs" --no-progress
+    assert_success
+    run bash -c "unsquashfs -s $TEST_DIR/default.sqfs | grep compression-level"
+    echo "DEBUG output: [$output]" >&3
+    assert_output --partial "compression-level 15"
+}
