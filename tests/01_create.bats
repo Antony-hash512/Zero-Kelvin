@@ -2,8 +2,6 @@
 load 'test_helper/bats-support/load'
 load 'test_helper/bats-assert/load'
 
-#TODO: проверка через file, что созданнай файл это squashfs-образ
-
 setup() {
     export TEST_DIR=$(mktemp -d -t zks-create.XXXXXX)
     export SRC="$TEST_DIR/src"
