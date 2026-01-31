@@ -4,6 +4,7 @@ depends=(
     'glibc'             # Нужен для системных вызовов (стандарт)
     'squashfs-tools'    # mksquashfs, unsquashfs
     'squashfs-tools-ng' # <-- ВОТ ТУТ живёт tar2sqfs
+    'squashfuse'      # FUSE драйвер для монтирования без прав root
     'cryptsetup'        # LUKS
     'rclone'            # Rclone
     'util-linux'    # mount/umount (обычно не пишут, т.к. это база системы, но можно написать)
