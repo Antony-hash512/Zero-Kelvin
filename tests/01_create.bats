@@ -41,8 +41,8 @@ teardown() {
 }
 
 @test "Logic:Сжатие по умолчанию" {
-    # Извлекаем значение из исходного кода Rust
-    local default_comp=$(grep "DEFAULT_ZSTD_COMPRESSION" "$ZKS_PROJECT_ROOT/src/constants.rs" | awk -F'=' '{print $2}' | tr -d ' ;' | xargs)
+    # Извлекаем значение из исходного кода Rust (надежный парсинг числа после =)
+    local default_comp=$(sed -n 's/.*DEFAULT_ZSTD_COMPRESSION.*= *\([0-9]\+\).*/\1/p' "$ZKS_PROJECT_ROOT/src/constants.rs")
     
     run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/default.sqfs" --no-progress
     assert_success
