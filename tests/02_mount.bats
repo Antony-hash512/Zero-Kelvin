@@ -17,11 +17,11 @@ teardown_file() {
     rm -rf "$TMP_ENV"
 }
 @test "Smoke: Проверка статуса" {
-    run sudo $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
+    run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
     [ "$status" -eq 0 ]
     
     # Сразу размонтируем, чтобы не портить следующий тест
-    sudo $ZKS_SQM_BIN umount "$TMP_ENV/mnt_smoke"
+    $ZKS_SQM_BIN umount "$TMP_ENV/mnt_smoke"
 }
 
 
@@ -29,7 +29,7 @@ teardown_file() {
     run sudo $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt"
     [ -d "$TMP_ENV/mnt" ]
     # Сразу размонтируем, чтобы не портить следующий тест
-    sudo $ZKS_SQM_BIN umount "$TMP_ENV/mnt"
+    $ZKS_SQM_BIN umount "$TMP_ENV/mnt"
 }
 
 
@@ -37,11 +37,11 @@ teardown_file() {
 @test "Logic: Проверка файлов внутри" {
     # Тут каталог создаём для раздельного тестирования возможных ошибок
     mkdir -p "$TMP_ENV/mnt2"
-    sudo $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt2"
+    $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt2"
     
     run cat "$TMP_ENV/mnt2/file.txt"
     [ "$output" = "Hello" ]
     
-    sudo $ZKS_SQM_BIN umount "$TMP_ENV/mnt2"
+    $ZKS_SQM_BIN umount "$TMP_ENV/mnt2"
 }
 

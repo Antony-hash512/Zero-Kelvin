@@ -69,7 +69,8 @@ end
 # Тест 1 (без sudo) - переменные ZKS_* передадутся автоматически благодаря 'set -x'
 run_colored_bats tests/01_create.bats
 
-# Тест 2 (C SUDO) - ВНИМАНИЕ!
-# Sudo для монтирований уже прописан в тестах
-#and run_colored_bats tests/02_mount.bats
+# Тест 2
+# Sudo больше не нужен т.к. под капотом squash_manager-rs должен использоваться squashfuse
+# вместо системных утилит mount/umount, в отличие от них он не требует root прав
+and run_colored_bats tests/02_mount.bats
 
