@@ -1,6 +1,6 @@
-use anyhow::{Result, Context};
-use std::process::{Command, Output, Stdio};
+use anyhow::{Context, Result};
 use std::collections::VecDeque;
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 
 /// Abstraction for running system commands.
@@ -14,9 +14,9 @@ pub struct RealSystem;
 
 impl CommandExecutor for RealSystem {
     fn run(&self, program: &str, args: &[&str]) -> Result<Output> {
-         Command::new(program)
+        Command::new(program)
             .args(args)
-            .stdin(Stdio::null()) 
+            .stdin(Stdio::null())
             .output()
             .with_context(|| format!("Failed to execute command: {} {:?}", program, args))
     }
@@ -52,7 +52,10 @@ impl MockSystem {
     pub fn verify_complete(&self) {
         let queues = self.expectations.lock().unwrap();
         if !queues.is_empty() {
-             panic!("MockSystem: Not all expectations were met. Remaining: {:?}", *queues);
+            panic!(
+                "MockSystem: Not all expectations were met. Remaining: {:?}",
+                *queues
+            );
         }
     }
 }
@@ -77,7 +80,7 @@ impl MockExpectationBuilder {
 impl CommandExecutor for MockSystem {
     fn run(&self, program: &str, args: &[&str]) -> Result<Output> {
         let mut queues = self.expectations.lock().unwrap();
-        
+
         if let Some(expected) = queues.pop_front() {
             // Strict checking of program name
             if expected.program != program {
@@ -94,10 +97,13 @@ impl CommandExecutor for MockSystem {
                     program, expected.args, current_args
                 );
             }
-            
+
             Ok(expected.output)
         } else {
-             panic!("MockSystem: Unexpected command call (queue empty): {} {:?}", program, args);
+            panic!(
+                "MockSystem: Unexpected command call (queue empty): {} {:?}",
+                program, args
+            );
         }
     }
 }
@@ -119,22 +125,24 @@ mod tests {
             });
 
         // Test implementation usage
-        let res = mock.run("mksquashfs", &["/source", "/target", "-comp", "zstd"]).unwrap();
+        let res = mock
+            .run("mksquashfs", &["/source", "/target", "-comp", "zstd"])
+            .unwrap();
         assert!(res.status.success());
         assert_eq!(res.stdout, b"OK");
     }
-    
+
     #[test]
     #[should_panic(expected = "Unexpected args")]
     fn test_mock_system_wrong_args() {
         let mut mock = MockSystem::new();
         mock.expect("ls", &["-la"]).returns(Output {
-             status: std::process::ExitStatus::from_raw(0),
-             stdout: vec![],
-             stderr: vec![],
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: vec![],
+            stderr: vec![],
         });
-        
+
         // Should panic because args don't match
-        let _ = mock.run("ls", &["-l"]); 
+        let _ = mock.run("ls", &["-l"]);
     }
 }

@@ -32,11 +32,11 @@ pub enum Commands {
 
 fn main() {
     let args = ZksArgs::parse();
-    
+
     // Skeleton logic
     // env_logger::init(); // removed for now to avoid unsafe in tests or if strictly needed I'd put it in a function.
     // For now simple println is enough for skeleton
-    
+
     // log::info!("Started zks with args: {:?}", args);
     println!("ZKS started: {:?}", args);
 }
@@ -54,20 +54,26 @@ mod tests {
     #[test]
     fn test_parse_freeze_args() {
         let args = ZksArgs::parse_from(&[
-            "zks", "freeze",
+            "zks",
+            "freeze",
             "/home/user/data",
             "/mnt/backup/data.sqfs",
             "-e",
-            "--read", "/tmp/list.txt"
+            "--read",
+            "/tmp/list.txt",
         ]);
 
         match args.command {
-            Commands::Freeze { args, encrypt, read } => {
+            Commands::Freeze {
+                args,
+                encrypt,
+                read,
+            } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
                 assert!(encrypt);
                 assert_eq!(read, Some(PathBuf::from("/tmp/list.txt")));
-            },
+            }
             _ => panic!("Expected Freeze command"),
         }
     }
@@ -75,17 +81,22 @@ mod tests {
     #[test]
     fn test_parse_check_args() {
         let args = ZksArgs::parse_from(&[
-            "zks", "check",
+            "zks",
+            "check",
             "archive.sqfs",
             "--use-cmp",
-            "--force-delete"
+            "--force-delete",
         ]);
-         match args.command {
-            Commands::Check { archive_path, use_cmp, force_delete } => {
+        match args.command {
+            Commands::Check {
+                archive_path,
+                use_cmp,
+                force_delete,
+            } => {
                 assert_eq!(archive_path, PathBuf::from("archive.sqfs"));
                 assert!(use_cmp);
                 assert!(force_delete);
-            },
+            }
             _ => panic!("Expected Check command"),
         }
     }

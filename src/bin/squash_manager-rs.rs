@@ -1,8 +1,8 @@
+use anyhow::{Result, anyhow};
 use clap::Parser;
 use std::path::PathBuf;
-use anyhow::{Result, anyhow};
-use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
+use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 
 #[derive(Parser, Debug)]
 #[command(name = "squash_manager", about = "Manages SquashFS archives", version)]
@@ -36,22 +36,28 @@ pub enum Commands {
 
 fn main() -> Result<()> {
     if std::env::var("RUST_LOG").is_err() {
-        // Safe way to set default log level if not present, avoiding unsafe set_var if possible, 
+        // Safe way to set default log level if not present, avoiding unsafe set_var if possible,
         // but for CLI tool usually we rely on env_logger default behavior or just init.
         // For now just init.
     }
     env_logger::init();
-    
+
     let args = SquashManagerArgs::parse();
     let executor = RealSystem;
-    
+
     run(args, &executor)
 }
 
 /// Main logic entry point with dependency injection
 pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<()> {
     match args.command {
-        Commands::Create { input_path, output_path, encrypt, compression, no_progress } => {
+        Commands::Create {
+            input_path,
+            output_path,
+            encrypt,
+            compression,
+            no_progress,
+        } => {
             if encrypt {
                 return Err(anyhow!("Encryption support will be added in Stage 4"));
             }
@@ -62,29 +68,33 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
             let mut cmd_args = vec![
                 input_path.to_str().ok_or(anyhow!("Invalid input path"))?,
-                output_path.as_ref().ok_or(anyhow!("Output path required"))?.to_str().ok_or(anyhow!("Invalid output path"))?,
+                output_path
+                    .as_ref()
+                    .ok_or(anyhow!("Output path required"))?
+                    .to_str()
+                    .ok_or(anyhow!("Invalid output path"))?,
             ];
 
             if no_progress {
                 cmd_args.push("-no-progress");
             }
-            
+
             cmd_args.push("-comp");
             cmd_args.push("zstd");
-            
+
             cmd_args.push("-Xcompression-level");
             let comp_level_str = compression.to_string();
             cmd_args.push(&comp_level_str);
 
             let output = executor.run("mksquashfs", &cmd_args)?;
-            
+
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(anyhow!("mksquashfs failed: {}", stderr));
             }
 
             Ok(())
-        },
+        }
         _ => Ok(()),
     }
 }
@@ -92,9 +102,9 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_kelvin_stazis::executor::MockSystem;
-    use std::process::Output;
     use std::os::unix::process::ExitStatusExt;
+    use std::process::Output;
+    use zero_kelvin_stazis::executor::MockSystem;
 
     #[test]
     fn verify_cli() {
@@ -106,13 +116,19 @@ mod tests {
     fn test_create_plain_archive() {
         let mut mock = MockSystem::new();
         // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level 15
-        mock.expect("mksquashfs", &[
-            "input_dir", 
-            "output.sqfs", 
-            "-no-progress",
-            "-comp", "zstd", 
-            "-Xcompression-level", &DEFAULT_ZSTD_COMPRESSION.to_string()
-        ]).returns(Output {
+        mock.expect(
+            "mksquashfs",
+            &[
+                "input_dir",
+                "output.sqfs",
+                "-no-progress",
+                "-comp",
+                "zstd",
+                "-Xcompression-level",
+                &DEFAULT_ZSTD_COMPRESSION.to_string(),
+            ],
+        )
+        .returns(Output {
             status: std::process::ExitStatus::from_raw(0),
             stdout: vec![],
             stderr: vec![],
@@ -125,11 +141,11 @@ mod tests {
                 encrypt: false,
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
-            }
+            },
         };
 
         run(args, &mock).unwrap();
-        
+
         mock.verify_complete();
     }
 
@@ -143,12 +159,15 @@ mod tests {
                 encrypt: true,
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: false,
-            }
+            },
         };
 
         // This should fail
         let result = run(args, &mock);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Encryption support will be added in Stage 4");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Encryption support will be added in Stage 4"
+        );
     }
 }

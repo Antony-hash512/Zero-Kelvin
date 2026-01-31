@@ -25,3 +25,7 @@ test-all:
     just unit-tests
     just build-and-shell-tests
 
+# Проверить форматирование (удобно для пре-коммит хуков)
+fmt-check:
+    cargo fmt -- --check
+

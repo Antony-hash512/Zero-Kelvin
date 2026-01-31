@@ -9,17 +9,17 @@ pub enum EntryType {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
-   pub id: u32,
-   
-   #[serde(rename = "type")]
-   pub entry_type: EntryType,
-   
-   // New format
-   pub name: Option<String>,
-   pub restore_path: Option<String>,
-   
-   // Legacy format
-   pub original_path: Option<String>,
+    pub id: u32,
+
+    #[serde(rename = "type")]
+    pub entry_type: EntryType,
+
+    // New format
+    pub name: Option<String>,
+    pub restore_path: Option<String>,
+
+    // Legacy format
+    pub original_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,16 +52,16 @@ files:
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(manifest.metadata.host, "katana");
         assert_eq!(manifest.files[0].id, 1);
-        
+
         if let Some(path) = &manifest.files[0].original_path {
-             assert_eq!(path, "/home/user/data");
+            assert_eq!(path, "/home/user/data");
         } else {
-             panic!("Legacy path not found");
+            panic!("Legacy path not found");
         }
-        
+
         assert_eq!(manifest.files[0].entry_type, EntryType::Directory);
     }
-    
+
     #[test]
     fn test_deserialize_new_manifest() {
         let yaml = r#"
