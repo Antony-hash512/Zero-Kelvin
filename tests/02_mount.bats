@@ -82,7 +82,7 @@ teardown_file() {
     
     # Cleanup
     $ZKS_SQM_BIN umount "$generated_path"
-    rmdir "$generated_path"
+    rmdir "$generated_path" 2>/dev/null || true
 }
 
 @test "Error: Файл образа не существует" {
@@ -116,6 +116,6 @@ teardown_file() {
     # Cleanup
     $ZKS_SQM_BIN umount "$path1"
     $ZKS_SQM_BIN umount "$path2"
-    rmdir "$path1"
-    rmdir "$path2"
+    rmdir "$path1" 2>/dev/null || true
+    rmdir "$path2" 2>/dev/null || true
 }
