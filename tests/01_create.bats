@@ -38,9 +38,16 @@ teardown() {
     run bash -c "unsquashfs -s $TEST_DIR/comp.sqfs | grep compression-level"
     echo "DEBUG output: [$output]" >&3
     assert_output --partial "compression-level 1"
+    [ -f "$TEST_DIR/comp.sqfs" ]
 }
 
 @test "Logic:Сжатие по умолчанию" {
+    # В релизной версии данный тест отключается т.к. может сломаться
+    # если во внешней утилите mksquashfs дефолтная степень сжатия изменится
+
+    if [ "$ZKS_RELEASE" = "true" ]; then
+        skip "Default compression test is disabled in release mode"
+    fi
     # Извлекаем значение из исходного кода Rust (надежный парсинг числа после =)
     local default_comp=$(sed -n 's/.*DEFAULT_ZSTD_COMPRESSION.*= *\([0-9]\+\).*/\1/p' "$ZKS_PROJECT_ROOT/src/constants.rs")
     [ "$default_comp" -eq 15 ] && skip "Default compression is 15"
