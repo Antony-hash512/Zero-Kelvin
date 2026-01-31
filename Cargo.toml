@@ -29,6 +29,9 @@ clap = { version = "4.5", features = ["derive"] }
 # Позволяет писать Result<?> и использовать оператор '?' вместо кучи if/else
 anyhow = "1.0"
 
+# более удобное создание ошибок
+thiserror = "2.0"
+
 # 3. Работа с YAML (для list.yaml)
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
@@ -48,6 +51,9 @@ tempfile = "3.24"
 # 7. Логирование (вместо echo)
 log = "0.4"
 env_logger = "0.11"
+
+# 8. Генерация случайных чисел (для разных целей)
+rand = "0.9"
 
 [dev-dependencies]
 # Инструменты для ТЕСТОВ

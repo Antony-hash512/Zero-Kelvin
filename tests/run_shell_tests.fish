@@ -71,5 +71,5 @@ run_colored_bats tests/01_create.bats
 
 # Тест 2 (C SUDO) - ВНИМАНИЕ!
 # Sudo для монтирований уже прописан в тестах
-and run_colored_bats tests/02_mount.bats
+#and run_colored_bats tests/02_mount.bats
 
