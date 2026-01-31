@@ -74,4 +74,4 @@ run_colored_bats tests/01_create.bats
 # вместо системных утилит mount/umount, в отличие от них он не требует root прав
 and run_colored_bats tests/02_mount.bats
 
-run_colored_bats tests/03_umount.bats
+and run_colored_bats tests/03_umount.bats

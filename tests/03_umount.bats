@@ -13,7 +13,7 @@ teardown_file() {
     rm -rf "$TMP_ENV"
 }
 
-@test "Smoke: Размонтирование по явному пути" {
+@test "Smoke: Размонтирование по явному пути (статус 0)" {
     mkdir -p "$TMP_ENV/mnt_smoke"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
     [ -d "$TMP_ENV/mnt_smoke" ]
@@ -31,7 +31,40 @@ teardown_file() {
     # но косвенная проверка через доступность файлов тоже ок для Smoke.
 }
 
-@test "Logic: Размонтирование по пути к файлу образа (Image Path)" {
+@test "Logic: Размонтирование по явному пути (Удаление каталога)" {
+    mkdir -p "$TMP_ENV/mnt_rmdir"
+    $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_rmdir"
+    [ -d "$TMP_ENV/mnt_rmdir" ]
+    
+    # Непосредственно тест
+    run $ZKS_SQM_BIN umount "$TMP_ENV/mnt_rmdir"
+    [ "$status" -eq 0 ]
+    
+    # Проверка, что каталог БЫЛ УДАЛЕН
+    [ ! -d "$TMP_ENV/mnt_rmdir" ]
+}
+
+@test "Logic: Размонтирование по явному пути (Сохранение каталога)" {
+    mkdir -p "$TMP_ENV/mnt_keepdir"
+    touch "$TMP_ENV/mnt_keepdir/file.txt"
+    $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_keepdir"
+    [ -d "$TMP_ENV/mnt_keepdir" ]
+    
+    # Непосредственно тест
+    run $ZKS_SQM_BIN umount "$TMP_ENV/mnt_keepdir"
+    [ "$status" -eq 0 ]
+    
+    # Проверка, что каталог НЕ БЫЛ УДАЛЕН
+    [ -d "$TMP_ENV/mnt_keepdir" ]
+
+    # Проверка, что внутри каталога по прежнему есть файлы
+    [ -f "$TMP_ENV/mnt_keepdir/file.txt" ]
+
+    # Очистка
+    rm -rf "$TMP_ENV/mnt_keepdir"
+}
+
+@test "Logic: Размонтирование по пути к файлу образа (Image Path) (статус 0)" {
     mkdir -p "$TMP_ENV/mnt_img"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img"
     
@@ -46,6 +79,39 @@ teardown_file() {
     # Проверка факта размонтирования
     [ ! -f "$TMP_ENV/mnt_img/file.txt" ]
 }
+
+@test "Logic: Размонтирование по пути к файлу образа (Image Path) (Удаление каталога)" {
+    mkdir -p "$TMP_ENV/mnt_img_rmdir"
+    $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img_rmdir"
+    
+    # Тест: передаем путь к .sqfs файлу
+    run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
+    [ "$status" -eq 0 ]
+    
+    # Проверка, что каталог БЫЛ УДАЛЕН
+    [ ! -d "$TMP_ENV/mnt_img_rmdir" ]
+}
+
+@test "Logic: Размонтирование по пути к файлу образа (Image Path) (Сохранение каталога)" {
+    mkdir -p "$TMP_ENV/mnt_img_keepdir"
+    touch "$TMP_ENV/mnt_img_keepdir/file.txt"
+    $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img_keepdir"
+    [ -d "$TMP_ENV/mnt_img_keepdir" ]
+    
+    # Непосредственно тест
+    run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
+    [ "$status" -eq 0 ]
+    
+    # Проверка, что каталог НЕ БЫЛ УДАЛЕН
+    [ -d "$TMP_ENV/mnt_img_keepdir" ]
+
+    # Проверка, что внутри каталога по прежнему есть файлы
+    [ -f "$TMP_ENV/mnt_img_keepdir/file.txt" ]
+
+    # Очистка
+    rm -rf "$TMP_ENV/mnt_img_keepdir"
+}
+
 
 @test "Logic: Размонтирование множественных точек (Multiple Mounts)" {
     mkdir -p "$TMP_ENV/mnt_multi_1"
