@@ -19,7 +19,7 @@ pub enum Commands {
         output_path: Option<PathBuf>,
         #[arg(short, long)]
         encrypt: bool,
-        #[arg(short, long, default_value_t = 15)]
+        #[arg(short, long, default_value_t = 19)]
         compression: u32,
         #[arg(long)]
         no_progress: bool,
@@ -110,7 +110,7 @@ mod tests {
             "output.sqfs", 
             "-no-progress",
             "-comp", "zstd", 
-            "-Xcompression-level", "15"
+            "-Xcompression-level", "19"
         ]).returns(Output {
             status: std::process::ExitStatus::from_raw(0),
             stdout: vec![],
@@ -122,7 +122,7 @@ mod tests {
                 input_path: PathBuf::from("input_dir"),
                 output_path: Some(PathBuf::from("output.sqfs")),
                 encrypt: false,
-                compression: 15,
+                compression: 19,
                 no_progress: true,
             }
         };
@@ -140,7 +140,7 @@ mod tests {
                 input_path: PathBuf::from("input_dir"),
                 output_path: Some(PathBuf::from("output.sqfs")),
                 encrypt: true,
-                compression: 15,
+                compression: 19,
                 no_progress: false,
             }
         };

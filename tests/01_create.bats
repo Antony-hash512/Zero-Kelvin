@@ -45,5 +45,5 @@ teardown() {
     assert_success
     run bash -c "unsquashfs -s $TEST_DIR/default.sqfs | grep compression-level"
     echo "DEBUG output: [$output]" >&3
-    assert_output --partial "compression-level 15"
+    assert_output --partial "compression-level 19"
 }
