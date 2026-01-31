@@ -26,7 +26,7 @@ teardown_file() {
 
 
 @test "Logic: Монтирование архива, автоматическое создание каталога монтирования" {
-    run sudo $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt"
+    run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt"
     [ -d "$TMP_ENV/mnt" ]
     # Сразу размонтируем, чтобы не портить следующий тест
     $ZKS_SQM_BIN umount "$TMP_ENV/mnt"
