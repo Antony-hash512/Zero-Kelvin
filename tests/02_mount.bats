@@ -88,6 +88,11 @@ teardown_file() {
 @test "Error: Файл образа не существует" {
     run $ZKS_SQM_BIN mount "non_existent_file.sqfs"
     [ "$status" -ne 0 ]
+    
+    # Check for specific error message
+    # "No such file or directory" or "does not exist"
+    # Case insensitive grep
+    echo "$output" | grep -i -E "no such file|does not exist"
 }
 
 @test "Logic: Collision handling (Коллизия имен)" {
