@@ -120,7 +120,7 @@ mod tests {
         let input_path_str = input_path.to_str().unwrap();
 
         let mut mock = MockSystem::new();
-        // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level 19
+        // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level <DEFAULT_ZSTD_COMPRESSION>
         mock.expect(
             "mksquashfs",
             &[
