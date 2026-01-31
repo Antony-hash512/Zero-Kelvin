@@ -45,3 +45,72 @@ teardown_file() {
     $ZKS_SQM_BIN umount "$TMP_ENV/mnt2"
 }
 
+@test "Logic: Монтирование архива, автоматическое создание каталога монтирования (Auto-Gen)" {
+    # 1. запускает: `squash_manadger-rs mount <sqfs-образ>` без указания каталога
+    run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE"
+    
+    # 2. Проверяем успех
+    [ "$status" -eq 0 ]
+    
+    # 3. Проверяем сообщение в output
+    # <No mount point specified. Using auto-generated path: <имя каталога>
+    # Используем partial matching, так как путь полный
+    [[ "$output" == *"No mount point specified. Using auto-generated path:"* ]]
+    
+    # 4. Парсим "хвост"
+    local generated_path=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    
+    # 5. Проверяем формат имени: <префикс>_<unix-время>_<случайное_число, 6 цифр>
+    # Префикс = golden.sqfs
+    local dirname=$(basename "$generated_path")
+    local prefix="golden.sqfs"
+    
+    # Проверка префикса
+    [[ "$dirname" == "$prefix"* ]]
+    
+    # Проверка структуры (regex)
+    regex="^${prefix}_[0-9]+_[0-9]{6}$"
+    [[ "$dirname" =~ $regex ]]
+    
+    # 6. Проверяем что каталог создался
+    [ -d "$generated_path" ]
+    
+    # 7. Проверяем содержимое
+    [ -f "$generated_path/file.txt" ]
+    run cat "$generated_path/file.txt"
+    [ "$output" = "Hello" ]
+    
+    # Cleanup
+    $ZKS_SQM_BIN umount "$generated_path"
+    rmdir "$generated_path"
+}
+
+@test "Error: Файл образа не существует" {
+    run $ZKS_SQM_BIN mount "non_existent_file.sqfs"
+    [ "$status" -ne 0 ]
+}
+
+@test "Logic: Collision handling (Коллизия имен)" {
+    # 1. Первый запуск
+    run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE"
+    [ "$status" -eq 0 ]
+    local path1=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    
+    # 2. Второй запуск сразу же
+    run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE"
+    [ "$status" -eq 0 ]
+    local path2=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    
+    # 3. Проверяем что пути разные
+    [ "$path1" != "$path2" ]
+    
+    # 4. Проверяем что оба существуют и работают
+    [ -d "$path1" ]
+    [ -d "$path2" ]
+    
+    # Cleanup
+    $ZKS_SQM_BIN umount "$path1"
+    $ZKS_SQM_BIN umount "$path2"
+    rmdir "$path1"
+    rmdir "$path2"
+}
