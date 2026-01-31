@@ -41,9 +41,12 @@ teardown() {
 }
 
 @test "Logic:Сжатие по умолчанию" {
+    # Извлекаем значение из исходного кода Rust
+    local default_comp=$(grep "DEFAULT_ZSTD_COMPRESSION" "$ZKS_PROJECT_ROOT/src/constants.rs" | awk -F'=' '{print $2}' | tr -d ' ;' | xargs)
+    
     run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/default.sqfs" --no-progress
     assert_success
     run bash -c "unsquashfs -s $TEST_DIR/default.sqfs | grep compression-level"
     echo "DEBUG output: [$output]" >&3
-    assert_output --partial "compression-level 19"
+    assert_output --partial "compression-level $default_comp"
 }
