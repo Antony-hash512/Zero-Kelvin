@@ -24,7 +24,6 @@ impl CommandExecutor for RealSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockall::predicate::*;
     use std::os::unix::process::ExitStatusExt;
 
     #[test]
