@@ -3,7 +3,7 @@ depends=(
     'gcc-libs'          # Нужен для работы бинарника Rust
     'glibc'             # Нужен для системных вызовов (стандарт)
     'squashfs-tools'    # mksquashfs, unsquashfs
-    'squashfs-tools-ng' # <-- ВОТ ТУТ живет tar2sqfs
+    'squashfs-tools-ng' # <-- ВОТ ТУТ живёт tar2sqfs
     'cryptsetup'        # LUKS
     'rclone'            # Rclone
     'util-linux'    # mount/umount (обычно не пишут, т.к. это база системы, но можно написать)
