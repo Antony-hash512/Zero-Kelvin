@@ -5,8 +5,18 @@ use std::path::PathBuf;
 #[command(
     name = "zks", 
     about = "Zero Kelvin Stazis - Cold Storage Utility", 
-    version,
-    after_help = "Detailed Command Information:
+    version
+)]
+pub struct ZksArgs {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+impl ZksArgs {
+    pub fn build_command() -> clap::Command {
+        use clap::CommandFactory;
+        let cmd = Self::command();
+        cmd.after_help("Detailed Command Information:
 
   freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
     Offload data to a SquashFS archive (frozen state).
@@ -29,11 +39,8 @@ use std::path::PathBuf;
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
       --force-delete        Delete local files if they match the archive (Destructive!).
-"
-)]
-pub struct ZksArgs {
-    #[command(subcommand)]
-    pub command: Commands,
+")
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -79,24 +86,21 @@ fn main() {
 
     // 1. No args -> Help + Exit 0
     if args_raw.len() <= 1 {
-         use clap::CommandFactory;
-         let _ = ZksArgs::command().print_help();
+         ZksArgs::build_command().print_help().unwrap_or_default();
          println!();
          return;
     }
 
-    let args = match ZksArgs::try_parse() {
-        Ok(a) => a,
+    let matches = match ZksArgs::build_command().try_get_matches() {
+        Ok(m) => m,
         Err(e) => {
             use clap::error::ErrorKind;
-            use clap::CommandFactory;
-
             match e.kind() {
                 // 2. Invalid subcommand -> Full Help + Exit 2
                 ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
                     if args_raw.len() >= 2 && !args_raw[1].starts_with('-') {
                         eprintln!("Error: {}\n", e);
-                        let _ = ZksArgs::command().print_help();
+                        ZksArgs::build_command().print_help().unwrap_or_default();
                         println!();
                         std::process::exit(2);
                     }
@@ -105,10 +109,10 @@ fn main() {
                 ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand | ErrorKind::TooFewValues | ErrorKind::ValueValidation => {
                     if args_raw.len() >= 2 {
                         let sub = &args_raw[1];
-                        let mut cmd = ZksArgs::command();
+                        let mut cmd = ZksArgs::build_command();
                         if let Some(sub_cmd) = cmd.find_subcommand_mut(sub) {
                              eprintln!("Error: {}\n", e);
-                             let _ = sub_cmd.print_help();
+                             sub_cmd.print_help().unwrap_or_default();
                              println!();
                              std::process::exit(e.exit_code());
                         }
@@ -119,6 +123,13 @@ fn main() {
             e.exit();
         }
     };
+    
+    use clap::FromArgMatches;
+    let args = ZksArgs::from_arg_matches(&matches)
+        .map_err(|e| {
+            e.exit();
+        })
+        .unwrap();
 
     println!("ZKS started: {:?}", args);
 }

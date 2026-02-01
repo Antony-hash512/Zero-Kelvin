@@ -12,8 +12,18 @@ use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 #[command(
     name = "squash_manager", 
     about = "Manages SquashFS archives", 
-    version,
-    after_help = "Detailed Command Information:
+    version
+)]
+pub struct SquashManagerArgs {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+impl SquashManagerArgs {
+    pub fn build_command() -> clap::Command {
+        use clap::CommandFactory;
+        let cmd = Self::command();
+        cmd.after_help(format!("Detailed Command Information:
 
   create <INPUT> [OUTPUT] [OPTIONS]
     Convert a directory or an archive into a SquashFS image.
@@ -22,7 +32,7 @@ use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
       OUTPUT                (Optional) Path to the resulting image.
     Options:
       -e, --encrypt         Create an encrypted LUKS container.
-      -c, --compression N   Zstd compression level (default: 19).
+      -c, --compression N   Zstd compression level (default: {0}).
       --no-progress         Disable variable progress bar.
 
   mount <IMAGE> [MOUNT_POINT]
@@ -36,11 +46,8 @@ use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
     Unmounts a directory or all instances of an image.
     Arguments:
       TARGET                Mount point directory OR path to the image file.
-"
-)]
-pub struct SquashManagerArgs {
-    #[command(subcommand)]
-    pub command: Commands,
+", DEFAULT_ZSTD_COMPRESSION))
+    }
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -59,7 +66,7 @@ pub enum Commands {
         #[arg(short, long)]
         encrypt: bool,
 
-        /// Zstd compression level (default: 15)
+        /// Zstd compression level
         #[arg(short, long, default_value_t = DEFAULT_ZSTD_COMPRESSION)]
         compression: u32,
 
@@ -94,37 +101,32 @@ fn main() -> Result<()> {
 
     // 1. No args -> Help + Exit 0
     if args_raw.len() <= 1 {
-         use clap::CommandFactory;
-         SquashManagerArgs::command().print_help()?;
+         SquashManagerArgs::build_command().print_help()?;
          println!();
          return Ok(());
     }
 
-    let args = match SquashManagerArgs::try_parse() {
-        Ok(a) => a,
+    // Use try_parse_from to catch --help and handle it with build_command if necessary
+    // Actually, clap's FromArgMatches trait allows us to map matches back to the struct.
+    let matches = match SquashManagerArgs::build_command().try_get_matches() {
+        Ok(m) => m,
         Err(e) => {
             use clap::error::ErrorKind;
-            use clap::CommandFactory;
-
             match e.kind() {
                 // 2. Invalid subcommand -> Full Help + Exit 2
                 ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
-                    // Check if it's at the top level
-                    if args_raw.len() >= 2 {
-                        let potential_sub = &args_raw[1];
-                        if !potential_sub.starts_with('-') {
-                            eprintln!("Error: {}\n", e);
-                            SquashManagerArgs::command().print_help()?;
-                            println!();
-                            std::process::exit(2);
-                        }
+                    if args_raw.len() >= 2 && !args_raw[1].starts_with('-') {
+                        eprintln!("Error: {}\n", e);
+                        SquashManagerArgs::build_command().print_help()?;
+                        println!();
+                        std::process::exit(2);
                     }
                 }
-                // 3. Command specific errors (missing args, etc.) -> Subcommand Help
+                // 3. Command specific errors -> Subcommand Help
                 ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand | ErrorKind::TooFewValues | ErrorKind::ValueValidation => {
                     if args_raw.len() >= 2 {
                         let sub = &args_raw[1];
-                        let mut cmd = SquashManagerArgs::command();
+                        let mut cmd = SquashManagerArgs::build_command();
                         if let Some(sub_cmd) = cmd.find_subcommand_mut(sub) {
                              eprintln!("Error: {}\n", e);
                              sub_cmd.print_help()?;
@@ -139,6 +141,13 @@ fn main() -> Result<()> {
         }
     };
     
+    use clap::FromArgMatches;
+    let args = SquashManagerArgs::from_arg_matches(&matches)
+        .map_err(|e| {
+            e.exit();
+        })
+        .unwrap();
+
     let executor = RealSystem;
 
     run(args, &executor)
