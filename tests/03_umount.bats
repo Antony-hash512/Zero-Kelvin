@@ -81,6 +81,12 @@ teardown() {
     # Тест: передаем путь к .sqfs файлу, а не к точке монтирования
     run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
     
+    if [ "$status" -ne 0 ]; then
+        echo "DEBUG: Status is $status"
+        echo "DEBUG: /proc/mounts content:"
+        cat /proc/mounts
+    fi
+    
     [ "$status" -eq 0 ]
     
     # Проверка вывода (опционально)
