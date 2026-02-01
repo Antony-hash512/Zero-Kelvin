@@ -16,6 +16,19 @@ setup_file() {
 teardown_file() {
     rm -rf "$TMP_ENV"
 }
+
+setup() {
+    # Создаем уникальную подпапку для каждого теста внутри глобального TMP_ENV
+    # чтобы teardown мог почистить только то, что относится к текущему тесту
+    export TEST_MNT_ROOT="$TMP_ENV/mnt_$(date +%s)_$RANDOM"
+    mkdir -p "$TEST_MNT_ROOT"
+}
+
+teardown() {
+    # Агрессивно пытаемся размонтировать всё внутри TMP_ENV
+    # Это гарантирует, что даже если тест упал, дескрипторы закроются
+    find "$TMP_ENV" -maxdepth 2 -type d -exec fusermount -u {} 2>/dev/null \; || true
+}
 @test "Smoke: Проверка статуса" {
     run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
     [ "$status" -eq 0 ]

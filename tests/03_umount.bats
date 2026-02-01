@@ -13,6 +13,16 @@ teardown_file() {
     rm -rf "$TMP_ENV"
 }
 
+setup() {
+    export TEST_MNT_ROOT="$TMP_ENV/mnt_$(date +%s)_$RANDOM"
+    mkdir -p "$TEST_MNT_ROOT"
+}
+
+teardown() {
+    # Чистим все монтирования внутри временной папки
+    find "$TMP_ENV" -maxdepth 2 -type d -exec fusermount -u {} 2>/dev/null \; || true
+}
+
 @test "Smoke: Размонтирование по явному пути (статус 0)" {
     mkdir -p "$TMP_ENV/mnt_smoke"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
