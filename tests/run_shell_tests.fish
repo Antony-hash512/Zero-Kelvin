@@ -78,3 +78,5 @@ and run_colored_bats tests/01_create.bats
 and run_colored_bats tests/02_mount.bats
 
 and run_colored_bats tests/03_umount.bats
+
+and run_colored_bats tests/04_unpack.bats

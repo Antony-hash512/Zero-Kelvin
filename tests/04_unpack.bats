@@ -22,7 +22,7 @@ setup() {
 teardown() {
     # Run helper script to unmount if needed (best effort)
     # Using run with command to avoid failing teardown
-    run squash_manager-rs umount "$MOUNT_POINT"
+    run $ZKS_SQM_BIN umount "$MOUNT_POINT"
     
     # Remove test directory
     rm -rf "$TEST_DIR"
@@ -33,7 +33,7 @@ teardown() {
     tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
     
     # Tests that create accepts a file (not just dir) and produces valid sqfs
-    run squash_manager-rs create "$TEST_DIR/input.tar" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     [ -f "$OUTPUT_SQFS" ]
     
@@ -46,7 +46,7 @@ teardown() {
 @test "Repack: .tar.gz (gzip) to .sqfs" {
     tar -czf "$TEST_DIR/input.tar.gz" -C "$TEST_DIR" input_data
     
-    run squash_manager-rs create "$TEST_DIR/input.tar.gz" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.gz" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     [ -f "$OUTPUT_SQFS" ]
     
@@ -62,7 +62,7 @@ teardown() {
     
     tar --zstd -cf "$TEST_DIR/input.tar.zst" -C "$TEST_DIR" input_data
     
-    run squash_manager-rs create "$TEST_DIR/input.tar.zst" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.zst" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     
     run unsquashfs -l "$OUTPUT_SQFS"
@@ -72,39 +72,62 @@ teardown() {
 @test "Repack: .tar.xz (xz) to .sqfs" {
     tar -cJf "$TEST_DIR/input.tar.xz" -C "$TEST_DIR" input_data
     
-    run squash_manager-rs create "$TEST_DIR/input.tar.xz" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.xz" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     
     run unsquashfs -l "$OUTPUT_SQFS"
     [[ "$output" == *"input_data/file1.txt"* ]]
 }
 
-@test "Repack: .zip (InfoZip) to .sqfs" {
+@test "Repack: .tar.zip (InfoZip) to .sqfs" {
     # Requires zip
     if ! command -v zip &> /dev/null; then
         skip "zip not found"
     fi
     
-    cd "$TEST_DIR" && zip -r input.zip input_data
+    # Create inner tar first
+    tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
+    cd "$TEST_DIR" && zip input.tar.zip input.tar
     
-    run squash_manager-rs create "$TEST_DIR/input.zip" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.zip" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     
     run unsquashfs -l "$OUTPUT_SQFS"
     [[ "$output" == *"input_data/file1.txt"* ]]
 }
 
-@test "Repack: .7z (7zip) to .sqfs" {
+@test "Repack: .tar.7z (7zip) to .sqfs" {
     # Requires 7z
     if ! command -v 7z &> /dev/null; then
         skip "7z not found"
     fi
     
-    cd "$TEST_DIR" && 7z a input.7z input_data
+    tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
+    cd "$TEST_DIR" && 7z a input.tar.7z input.tar
     
-    run squash_manager-rs create "$TEST_DIR/input.7z" "$OUTPUT_SQFS" --no-progress
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.7z" "$OUTPUT_SQFS" --no-progress
     [ "$status" -eq 0 ]
     
+    run unsquashfs -l "$OUTPUT_SQFS"
+    [[ "$output" == *"input_data/file1.txt"* ]]
+}
+
+@test "Repack: .tar.rar (RAR) to .sqfs" {
+    # Requires rar (for creating) and unrar (for testing)
+    # Check for rar or skip, since we need to CREATE the test file
+    if ! command -v rar &> /dev/null; then
+        skip "rar not found (needed to create test file)"
+    fi
+    if ! command -v unrar &> /dev/null; then
+        skip "unrar not found (needed for extraction logic)"
+    fi
+
+    tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
+    cd "$TEST_DIR" && rar a input.tar.rar input.tar
+
+    run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.rar" "$OUTPUT_SQFS" --no-progress
+    [ "$status" -eq 0 ]
+
     run unsquashfs -l "$OUTPUT_SQFS"
     [[ "$output" == *"input_data/file1.txt"* ]]
 }

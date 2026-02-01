@@ -35,6 +35,18 @@ impl SquashManagerArgs {
       -c, --compression N   Zstd compression level (default: {0}).
       --no-progress         Disable variable progress bar.
 
+    Supported Input Formats (repacked on-the-fly via pipe):
+      - Directory: Standard behavior
+      - Tarball:   .tar (requires 'cat')
+      - Combos:    .tar.gz, .tgz (requires 'gzip')
+                   .tar.bz2, .tbz2 (requires 'bzip2')
+                   .tar.xz, .txz (requires 'xz')
+                   .tar.zst, .tzst (requires 'zstd')
+                   .tar.zip (requires 'unzip')
+                   .tar.7z (requires '7z')
+                   .tar.rar (requires 'unrar')
+      Note: Archive repacking requires 'tar2sqfs' (from squashfs-tools-ng) installed.
+
   mount <IMAGE> [MOUNT_POINT]
     Mount a SquashFS image as a directory.
     Arguments:
@@ -167,10 +179,71 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 return Err(anyhow!("Encryption support will be added in Stage 4"));
             }
 
+            // 1. Check if input exists
             if !input_path.exists() {
                 return Err(anyhow!("Input path does not exist: {:?}", input_path));
             }
 
+            // 2. Archive Repacking (File -> SquashFS)
+            if input_path.is_file() {
+                let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
+                let output_str = output_path
+                    .as_ref()
+                    .ok_or(anyhow!("Output path required"))?
+                    .to_str()
+                    .ok_or(anyhow!("Invalid output path"))?;
+
+                // Determine decompressor
+                let file_name = input_path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let decompressor = if file_name.ends_with(".tar") {
+                    "cat"
+                } else if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+                    "gzip -dc"
+                } else if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") {
+                     "bzip2 -dc"
+                } else if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
+                    "xz -dc"
+                } else if file_name.ends_with(".tar.zst") || file_name.ends_with(".tzst") {
+                    "zstd -dc"
+                } else if file_name.ends_with(".tar.zip") {
+                    "unzip -p"
+                } else if file_name.ends_with(".tar.7z") {
+                    "7z x -so"
+                } else if file_name.ends_with(".tar.rar") {
+                    "unrar p -inul"
+                } else {
+                    return Err(anyhow!("Unsupported archive format: {}", file_name));
+                };
+
+                // Construct pipeline: decompressor input | tar2sqfs options output
+                // Using explicit quoting for paths to handle spaces safely in sh -c
+                let cmd = format!(
+                    "{} '{}' | tar2sqfs --quiet --no-skip --force -c zstd -j {} '{}'",
+                    decompressor,
+                    input_str.replace("'", "'\\''"), // Escape single quotes in path
+                    compression,
+                    output_str.replace("'", "'\\''")
+                );
+
+                if std::env::var("RUST_LOG").is_ok() {
+                    eprintln!("DEBUG: Executing pipeline: {}", cmd);
+                }
+
+                let output = executor.run("sh", &["-c", &cmd])?;
+
+                if !output.status.success() {
+                     let stderr = String::from_utf8_lossy(&output.stderr);
+                     return Err(anyhow!("Archive repack failed: {}", stderr));
+                }
+                
+                return Ok(());
+            }
+
+            // 3. Standard Directory Packing (Directory -> SquashFS)
             let mut cmd_args = vec![
                 input_path.to_str().ok_or(anyhow!("Invalid input path"))?,
                 output_path
