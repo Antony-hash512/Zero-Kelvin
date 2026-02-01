@@ -7,6 +7,13 @@ pub enum EntryType {
     Directory,
 }
 
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrivilegeMode {
+    User,
+    Root,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
     pub id: u32,
@@ -26,6 +33,8 @@ pub struct FileEntry {
 pub struct Metadata {
     pub date: String,
     pub host: String,
+    // Optional for backward compatibility with legacy archives
+    pub privilege_mode: Option<PrivilegeMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -52,6 +61,9 @@ files:
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(manifest.metadata.host, "katana");
         assert_eq!(manifest.files[0].id, 1);
+        
+        // Ensure privilege_mode is None for legacy
+        assert_eq!(manifest.metadata.privilege_mode, None);
 
         if let Some(path) = &manifest.files[0].original_path {
             assert_eq!(path, "/home/user/data");
@@ -68,6 +80,7 @@ files:
 metadata:
   date: "Tue Jan 27 08:09:58 PM +04 2026"
   host: "katana"
+  privilege_mode: "user"
 files:
   - id: 2
     name: "docs"
@@ -75,8 +88,22 @@ files:
     type: file
 "#;
         let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.metadata.privilege_mode, Some(PrivilegeMode::User));
         assert_eq!(manifest.files[0].id, 2);
         assert_eq!(manifest.files[0].name.as_ref().unwrap(), "docs");
         assert_eq!(manifest.files[0].entry_type, EntryType::File);
+    }
+
+    #[test]
+    fn test_deserialize_root_privilege_mode() {
+        let yaml = r#"
+metadata:
+  date: "Tue Jan 27 08:09:58 PM +04 2026"
+  host: "katana"
+  privilege_mode: "root"
+files: []
+"#;
+        let manifest: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(manifest.metadata.privilege_mode, Some(PrivilegeMode::Root));
     }
 }
