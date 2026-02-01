@@ -38,7 +38,7 @@
     - [x] Реализовать тесты для `squash_manager-rs umount`
     - [x] Реализовать тест(ы) для `squash_manager-rs umount` с указанием образа вместо каталога монтирования
     - [x] Добавить тест для `squash_manager-rs create` с проверкой через file, что созданнай файл это squashfs-образ
-- [ ] **Код на Rust**
+- [x] **Код на Rust**
     - [x] Реализовать дополнительные юнит-тесты для `squash_manager-rs mount`/`squash_manager-rs umount` (если актуально)
     - [x] Реализовать успешное прохождение всех тестов для `squash_manager-rs mount`/`squash_manager-rs umount`  
     - [x] Обновить справочную информацию для `squash_manager-rs umount` описав новые возможности:
