@@ -9,7 +9,35 @@ use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 
 #[derive(Parser, Debug)]
-#[command(name = "squash_manager", about = "Manages SquashFS archives", version)]
+#[command(
+    name = "squash_manager", 
+    about = "Manages SquashFS archives", 
+    version,
+    after_help = "Detailed Command Information:
+
+  create <INPUT> [OUTPUT] [OPTIONS]
+    Convert a directory or an archive into a SquashFS image.
+    Arguments:
+      INPUT                 Source directory or archive file.
+      OUTPUT                (Optional) Path to the resulting image.
+    Options:
+      -e, --encrypt         Create an encrypted LUKS container.
+      -c, --compression N   Zstd compression level (default: 19).
+      --no-progress         Disable variable progress bar.
+
+  mount <IMAGE> [MOUNT_POINT]
+    Mount a SquashFS image as a directory.
+    Arguments:
+      IMAGE                 Path to the SquashFS image file.
+      MOUNT_POINT           (Optional) Manual mount point.
+                            Generated if omitted (prefix_timestamp_random).
+
+  umount <TARGET>
+    Unmounts a directory or all instances of an image.
+    Arguments:
+      TARGET                Mount point directory OR path to the image file.
+"
+)]
 pub struct SquashManagerArgs {
     #[command(subcommand)]
     pub command: Commands,
@@ -39,14 +67,19 @@ pub enum Commands {
         #[arg(long)]
         no_progress: bool,
     },
+    /// Mount a SquashFS archive to a directory (using squashfuse)
     Mount {
-        /// Image file to mount
+        /// Path to the SquashFS image file
+        #[arg(value_name = "IMAGE")]
         image: PathBuf,
-        /// Optional mount point. If omitted, a directory will be auto-generated in the current working directory.
+        /// Optional: Manual mount point. If omitted, a directory is created in the current working directory.
+        #[arg(value_name = "MOUNT_POINT")]
         mount_point: Option<PathBuf>,
     },
+    /// Unmount a previously mounted SquashFS image (using fusermount -u)
     Umount {
-        /// Directory to unmount OR path to the image file (will unmount all instances)
+        /// Target mount point directory OR path to the source image file
+        #[arg(value_name = "TARGET")]
         mount_point: PathBuf,
     },
 }
@@ -57,9 +90,10 @@ fn main() -> Result<()> {
     }
     env_logger::init();
 
-    // Custom help handling
+    let args_raw: Vec<String> = std::env::args().collect();
+
     // 1. No args -> Help + Exit 0
-    if std::env::args().len() <= 1 {
+    if args_raw.len() <= 1 {
          use clap::CommandFactory;
          SquashManagerArgs::command().print_help()?;
          println!();
@@ -67,32 +101,42 @@ fn main() -> Result<()> {
     }
 
     let args = match SquashManagerArgs::try_parse() {
-         Ok(a) => a,
-         Err(e) => {
-             use clap::error::ErrorKind;
-             match e.kind() {
-                 // 2. Invalid subcommand -> Help + Exit 2
-                 ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
-                      // Check if it's potentially an invalid subcommand at the top level
-                      // We can assume if arg length is 2 (bin + arg), it's likely an invalid command
-                      // But UnknownArgument can be deeper.
-                      // Let's rely on standard clap exit unless it specifically matches our "invalid command" case.
-                      // Actually, if we want to catch `binary foo` (InvalidSubcommand), we can just do:
-                      if e.kind() == ErrorKind::InvalidSubcommand {
-                          use clap::CommandFactory;
-                          // Print error
-                          eprintln!("Error: {}\n", e);
-                          // Print full help
-                          SquashManagerArgs::command().print_help()?;
-                          println!();
-                          std::process::exit(2);
-                      }
-                 }
-                 _ => {}
-             }
-             // 3. Other errors (invalid args, help flag) -> Standard behavior
-             e.exit();
-         }
+        Ok(a) => a,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            use clap::CommandFactory;
+
+            match e.kind() {
+                // 2. Invalid subcommand -> Full Help + Exit 2
+                ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
+                    // Check if it's at the top level
+                    if args_raw.len() >= 2 {
+                        let potential_sub = &args_raw[1];
+                        if !potential_sub.starts_with('-') {
+                            eprintln!("Error: {}\n", e);
+                            SquashManagerArgs::command().print_help()?;
+                            println!();
+                            std::process::exit(2);
+                        }
+                    }
+                }
+                // 3. Command specific errors (missing args, etc.) -> Subcommand Help
+                ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand | ErrorKind::TooFewValues | ErrorKind::ValueValidation => {
+                    if args_raw.len() >= 2 {
+                        let sub = &args_raw[1];
+                        let mut cmd = SquashManagerArgs::command();
+                        if let Some(sub_cmd) = cmd.find_subcommand_mut(sub) {
+                             eprintln!("Error: {}\n", e);
+                             sub_cmd.print_help()?;
+                             println!();
+                             std::process::exit(e.exit_code());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            e.exit();
+        }
     };
     
     let executor = RealSystem;

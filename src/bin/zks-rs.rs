@@ -2,7 +2,35 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "zks", about = "Zero Kelvin Store", version)]
+#[command(
+    name = "zks", 
+    about = "Zero Kelvin Stazis - Cold Storage Utility", 
+    version,
+    after_help = "Detailed Command Information:
+
+  freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
+    Offload data to a SquashFS archive (frozen state).
+    Arguments:
+      TARGETS...            Files or directories to freeze.
+      ARCHIVE_PATH          Destination .sqfs archive path.
+    Options:
+      -e, --encrypt         Encrypt the archive using LUKS (via squash_manager).
+      -r, --read <FILE>     Read list of targets from a file.
+
+  unfreeze <ARCHIVE_PATH>
+    Restore data from a frozen archive to its original locations.
+    Arguments:
+      ARCHIVE_PATH          Path to the .sqfs archive to restore.
+
+  check <ARCHIVE_PATH> [OPTIONS]
+    Verify archive integrity against the live system.
+    Arguments:
+      ARCHIVE_PATH          Path to the .sqfs archive to check.
+    Options:
+      --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
+      --force-delete        Delete local files if they match the archive (Destructive!).
+"
+)]
 pub struct ZksArgs {
     #[command(subcommand)]
     pub command: Commands,
@@ -10,34 +38,88 @@ pub struct ZksArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Freeze data into a SquashFS archive
     Freeze {
-        #[arg(value_name = "ARGS", num_args = 1..)]
+        /// Files or directories to include in the archive
+        #[arg(value_name = "TARGETS", num_args = 0..)]
         args: Vec<PathBuf>,
+        
+        /// Encrypt the archive using LUKS
         #[arg(short, long)]
         encrypt: bool,
-        #[arg(short, long)]
+        
+        /// Read the list of target paths from a file
+        #[arg(short, long, value_name = "FILE")]
         read: Option<PathBuf>,
     },
+    /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
+        /// Path to the SquashFS archive
+        #[arg(value_name = "ARCHIVE_PATH")]
         archive_path: PathBuf,
     },
+    /// Check integrity of an archive against the original files
     Check {
+        /// Path to the SquashFS archive
+        #[arg(value_name = "ARCHIVE_PATH")]
         archive_path: PathBuf,
+        
+        /// Perform byte-by-byte comparison
         #[arg(long)]
         use_cmp: bool,
+        
+        /// Delete local files if they match the archive content
         #[arg(long)]
         force_delete: bool,
     },
 }
 
 fn main() {
-    let args = ZksArgs::parse();
+    let args_raw: Vec<String> = std::env::args().collect();
 
-    // Skeleton logic
-    // env_logger::init(); // removed for now to avoid unsafe in tests or if strictly needed I'd put it in a function.
-    // For now simple println is enough for skeleton
+    // 1. No args -> Help + Exit 0
+    if args_raw.len() <= 1 {
+         use clap::CommandFactory;
+         let _ = ZksArgs::command().print_help();
+         println!();
+         return;
+    }
 
-    // log::info!("Started zks with args: {:?}", args);
+    let args = match ZksArgs::try_parse() {
+        Ok(a) => a,
+        Err(e) => {
+            use clap::error::ErrorKind;
+            use clap::CommandFactory;
+
+            match e.kind() {
+                // 2. Invalid subcommand -> Full Help + Exit 2
+                ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
+                    if args_raw.len() >= 2 && !args_raw[1].starts_with('-') {
+                        eprintln!("Error: {}\n", e);
+                        let _ = ZksArgs::command().print_help();
+                        println!();
+                        std::process::exit(2);
+                    }
+                }
+                // 3. Command specific errors -> Subcommand Help
+                ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand | ErrorKind::TooFewValues | ErrorKind::ValueValidation => {
+                    if args_raw.len() >= 2 {
+                        let sub = &args_raw[1];
+                        let mut cmd = ZksArgs::command();
+                        if let Some(sub_cmd) = cmd.find_subcommand_mut(sub) {
+                             eprintln!("Error: {}\n", e);
+                             let _ = sub_cmd.print_help();
+                             println!();
+                             std::process::exit(e.exit_code());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            e.exit();
+        }
+    };
+
     println!("ZKS started: {:?}", args);
 }
 
