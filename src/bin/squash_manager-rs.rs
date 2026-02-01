@@ -17,15 +17,25 @@ pub struct SquashManagerArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
+    /// Create a new SquashFS archive from a directory or existing archive
     Create {
+        /// Path to the source directory or archive file (tar, zip, etc.)
         #[arg(value_name = "INPUT")]
         input_path: PathBuf,
+
+        /// Path where the resulting SquashFS archive will be saved
         #[arg(value_name = "OUTPUT")]
         output_path: Option<PathBuf>,
+
+        /// Encrypt the archive using LUKS (Not yet implemented)
         #[arg(short, long)]
         encrypt: bool,
+
+        /// Zstd compression level (default: 15)
         #[arg(short, long, default_value_t = DEFAULT_ZSTD_COMPRESSION)]
         compression: u32,
+
+        /// Disable variable progress bar
         #[arg(long)]
         no_progress: bool,
     },
@@ -47,7 +57,44 @@ fn main() -> Result<()> {
     }
     env_logger::init();
 
-    let args = SquashManagerArgs::parse();
+    // Custom help handling
+    // 1. No args -> Help + Exit 0
+    if std::env::args().len() <= 1 {
+         use clap::CommandFactory;
+         SquashManagerArgs::command().print_help()?;
+         println!();
+         return Ok(());
+    }
+
+    let args = match SquashManagerArgs::try_parse() {
+         Ok(a) => a,
+         Err(e) => {
+             use clap::error::ErrorKind;
+             match e.kind() {
+                 // 2. Invalid subcommand -> Help + Exit 2
+                 ErrorKind::InvalidSubcommand | ErrorKind::UnknownArgument => {
+                      // Check if it's potentially an invalid subcommand at the top level
+                      // We can assume if arg length is 2 (bin + arg), it's likely an invalid command
+                      // But UnknownArgument can be deeper.
+                      // Let's rely on standard clap exit unless it specifically matches our "invalid command" case.
+                      // Actually, if we want to catch `binary foo` (InvalidSubcommand), we can just do:
+                      if e.kind() == ErrorKind::InvalidSubcommand {
+                          use clap::CommandFactory;
+                          // Print error
+                          eprintln!("Error: {}\n", e);
+                          // Print full help
+                          SquashManagerArgs::command().print_help()?;
+                          println!();
+                          std::process::exit(2);
+                      }
+                 }
+                 _ => {}
+             }
+             // 3. Other errors (invalid args, help flag) -> Standard behavior
+             e.exit();
+         }
+    };
+    
     let executor = RealSystem;
 
     run(args, &executor)

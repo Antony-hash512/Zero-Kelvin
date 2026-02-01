@@ -20,7 +20,7 @@ set -x ZKS_PROJECT_ROOT (realpath $script_dir/..)
 
 # Сразу вычисляем путь к бинарнику, чтобы не дублировать логику в bats
 set -x ZKS_SQM_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/squash_manager-rs"
-set -x ZKS_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/zsk-rs"
+set -x ZKS_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/zks-rs"
 
 echo "Project Root: $ZKS_PROJECT_ROOT"
 echo "Binary Path:  $ZKS_BIN"
@@ -66,8 +66,11 @@ end
 
 
 
+# Тест 0 (Help)
+run_colored_bats tests/00_help.bats
+
 # Тест 1 (без sudo) - переменные ZKS_* передадутся автоматически благодаря 'set -x'
-run_colored_bats tests/01_create.bats
+and run_colored_bats tests/01_create.bats
 
 # Тест 2
 # Sudo больше не нужен т.к. под капотом squash_manager-rs должен использоваться squashfuse
