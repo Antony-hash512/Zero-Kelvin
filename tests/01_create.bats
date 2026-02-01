@@ -25,6 +25,14 @@ teardown() {
     [ -f "$TEST_DIR/out.sqfs" ]
 }
 
+@test "Logic: Проверка типа файла через 'file'" {
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/type_check.sqfs" --no-progress
+    assert_success
+    run file "$TEST_DIR/type_check.sqfs"
+    assert_output --partial "Squashfs filesystem"
+    assert_output --partial "zstd compressed"
+}
+
 @test "Logic: Ошибка при отсутствии входной папки" {
     run $ZKS_SQM_BIN create "/bad/path" "$TEST_DIR/out.sqfs"
     echo "DEBUG output: [$output]" >&3
