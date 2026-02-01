@@ -115,11 +115,12 @@ list.yaml, to_restore, 1, 2, 3, 4 и т.д. -- фиксированные име
 metadata:
   date: "Tue Jan 27 08:09:58 PM +04 2026"
   host: "katana"
+  privilege_mode: "user" # или "root"
 files:
   - id: 1
     name: "etc"
     restore_path: "/home/user/data/chains"
-    type: directory
+    type: directory # или file
   - id: 2
     name: "eth-vanil"
     restore_path:  "/home/user/data/chains"
@@ -143,7 +144,7 @@ metadata:
 files:
   - id: 1
     original_path: "/home/share/data/extra/chains/etc"
-    type: directory
+    type: directory # или file
   - id: 2
     original_path: "/home/share/data/extra/chains/eth-vanil"
     type: directory
@@ -248,6 +249,9 @@ files:
 * **Unfreeze:**
     * **По умолчанию:** Пытается распаковать (`rsync`) от имени пользователя.
     * **Эскалация:** Если в архиве обнаружены файлы с чужим UID/GID или недоступные для чтения права, операция переключается в режим **Sudo Mode** (`sudo rsync`), предварительно уведомив пользователя и запросив пароль. Это гарантирует корректное восстановление владельцев.
+    * **Обратная совместимость (Legacy):** Если в `list.yaml` отсутствует поле `privilege_mode` (старый формат):
+        * Утилита сообщает пользователю: "Archive is in legacy format. Recommendation: Repackage after restoring."
+        * Явно спрашивает у пользователя режим восстановления: `[User/Root]`.
 
 #### 3. Архитектурные ограничения (Technical Constraints)
 
