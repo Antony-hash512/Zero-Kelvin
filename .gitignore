@@ -1,3 +1,9 @@
 /target
 
 /tests/draft.md
+
+# Arch Linux packaging
+/local_pkg/src/
+/local_pkg/pkg/
+/local_pkg/*.pkg.tar.zst
+/local_pkg/*.log
