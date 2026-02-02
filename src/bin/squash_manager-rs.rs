@@ -547,71 +547,77 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Need unsquashfs (sudo usually not needed for read, but reading from /dev/mapper requires root)
                 let mut trim_size: Option<u64> = None;
                 
-                // Get FS Size
+                // Get FS Size - we're already root in LUKS context, run directly
                 // unsquashfs -s /dev/mapper/...
-                if let Ok(out) = executor.run("sudo", &["unsquashfs", "-s", &mapper_path]) {
-                     let out_str = String::from_utf8_lossy(&out.stdout);
-                     
-                     // unsquashfs outputs two lines with "Filesystem size":
-                     // 1. "Filesystem size 726.11 Kbytes (0.71 Mbytes)" - human readable
-                     // 2. "Filesystem size 743538 bytes (726.11 Kbytes / 0.71 Mbytes)" - raw bytes
-                     // We need the second one (contains "bytes (")
-                     let mut fs_bytes: Option<u64> = None;
-                     for line in out_str.lines() {
-                         if line.contains("Filesystem size") && line.contains("bytes (") {
-                             // "Filesystem size 743538 bytes (726.11 Kbytes / 0.71 Mbytes)"
-                             let parts: Vec<&str> = line.split_whitespace().collect();
-                             // parts[0]="Filesystem" parts[1]="size" parts[2]="743538" parts[3]="bytes"
-                             if parts.len() >= 4 && parts[3] == "bytes" {
-                                 if let Ok(bytes) = parts[2].parse::<u64>() {
-                                     fs_bytes = Some(bytes);
-                                     break;
-                                 }
-                             }
-                         }
-                     }
-                     
-                     if let Some(bytes) = fs_bytes {
-                          // Get Offset
-                          if let Ok(dump) = executor.run("sudo", &["cryptsetup", "luksDump", output_str]) {
-                              let dump_str = String::from_utf8_lossy(&dump.stdout);
-                              let mut offset: u64 = 0;
-                              // LUKS2: "offset: 16777216 [bytes]"
-                              for line in dump_str.lines() {
-                                  if line.trim().starts_with("offset:") && line.contains("bytes") {
-                                      if let Some(val_str) = line.split_whitespace().nth(1) {
-                                          if let Ok(val) = val_str.parse::<u64>() {
-                                              offset = val;
-                                              break;
-                                          }
-                                      }
-                                  }
-                                  // LUKS1: "Payload offset: 4096" (sectors)
-                                  if line.trim().starts_with("Payload offset:") {
-                                      if let Some(val_str) = line.split_whitespace().nth(2) {
-                                          if let Ok(sect) = val_str.parse::<u64>() {
-                                              offset = sect * 512;
-                                              break;
-                                          }
-                                      }
-                                  }
-                              }
-                              
-                              if offset > 0 {
-                                   // Calc total
-                                   let raw_trim = bytes + offset + 1024*1024; // +1MB safety margin
-                                   // Align to 4096
-                                   let aligned = ((raw_trim + 4095) / 4096) * 4096;
-                                   trim_size = Some(aligned);
-                              }
-                          }
-                     }
+                match executor.run("unsquashfs", &["-s", &mapper_path]) {
+                    Ok(out) => {
+                        let out_str = String::from_utf8_lossy(&out.stdout);
+                        
+                        // unsquashfs -s output format:
+                        // "Filesystem size 248 bytes (0.24 Kbytes / 0.00 Mbytes)"
+                        // parts[0]="Filesystem" parts[1]="size" parts[2]="248" parts[3]="bytes"
+                        // We need to find line where parts[3] == "bytes" and parts[2] is an integer
+                        let mut fs_bytes: Option<u64> = None;
+                        for line in out_str.lines() {
+                            if line.contains("Filesystem size") && line.contains(" bytes ") {
+                                let parts: Vec<&str> = line.split_whitespace().collect();
+                                // parts[0]="Filesystem" parts[1]="size" parts[2]="248" parts[3]="bytes"
+                                if parts.len() >= 4 && parts[3] == "bytes" {
+                                    // Only accept if parts[2] is a pure integer (not "0.24")
+                                    if let Ok(bytes) = parts[2].parse::<u64>() {
+                                        fs_bytes = Some(bytes);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if let Some(bytes) = fs_bytes {
+                            // Get Offset - we're already root
+                            match executor.run("cryptsetup", &["luksDump", output_str]) {
+                                Ok(dump) => {
+                                    let dump_str = String::from_utf8_lossy(&dump.stdout);
+                                    let mut offset: u64 = 0;
+                                    // LUKS2: "offset: 16777216 [bytes]"
+                                    for line in dump_str.lines() {
+                                        if line.trim().starts_with("offset:") && line.contains("bytes") {
+                                            if let Some(val_str) = line.split_whitespace().nth(1) {
+                                                if let Ok(val) = val_str.parse::<u64>() {
+                                                    offset = val;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        // LUKS1: "Payload offset: 4096" (sectors)
+                                        if line.trim().starts_with("Payload offset:") {
+                                            if let Some(val_str) = line.split_whitespace().nth(2) {
+                                                if let Ok(sect) = val_str.parse::<u64>() {
+                                                    offset = sect * 512;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    if offset > 0 {
+                                        // Calc total
+                                        let raw_trim = bytes + offset + 1024*1024; // +1MB safety margin
+                                        // Align to 4096
+                                        let aligned = ((raw_trim + 4095) / 4096) * 4096;
+                                        trim_size = Some(aligned);
+                                    }
+                                },
+                                Err(_) => {}, // luksDump failed, skip trim
+                            }
+                        }
+                    },
+                    Err(_) => {}, // unsquashfs failed, skip trim
                 }
 
-                // 6. Close
+                // 6. Close - we're already root
                 // We do explicit close here to ensure success before truncate
                 // Transaction drop will try to close again but fail harmlessly or we can clear mapper from it
-                let _ = executor.run("sudo", &["cryptsetup", "close", &mapper_name]);
+                let _ = executor.run("cryptsetup", &["close", &mapper_name]);
                 transaction.mapper_name = None; // Disable drop cleanup for mapper
                 
                 // 7. Truncate
