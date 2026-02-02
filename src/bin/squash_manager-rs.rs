@@ -804,7 +804,13 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     pb.set_message("Repacking archive → SquashFS");
                     pb.enable_steady_tick(Duration::from_millis(100));
 
-                    let output = executor.run("sh", &["-c", &full_cmd])?;
+                    let output = executor.run_with_file_progress(
+                        "sh",
+                        &["-c", &full_cmd],
+                        output_buf,
+                        &pb,
+                        Duration::from_millis(100),
+                    )?;
                     
                     if output.status.success() {
                         pb.finish_with_message(format!(
@@ -887,7 +893,13 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 pb.set_message("Packing directory → SquashFS");
                 pb.enable_steady_tick(Duration::from_millis(100));
                 
-                let output = executor.run("mksquashfs", &cmd_args)?;
+                let output = executor.run_with_file_progress(
+                    "mksquashfs",
+                    &cmd_args,
+                    output_buf,
+                    &pb,
+                    Duration::from_millis(100),
+                )?;
                 
                 if output.status.success() {
                     pb.finish_with_message(format!(
@@ -1204,6 +1216,14 @@ mod tests {
         impl CommandExecutor for CommandExecutor {
             fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
             fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus>;
+            fn run_with_file_progress<'a>(
+                &self,
+                program: &str,
+                args: &[&'a str],
+                output_file: &std::path::Path,
+                progress_bar: &indicatif::ProgressBar,
+                poll_interval: std::time::Duration,
+            ) -> Result<Output>;
         }
     }
 
