@@ -42,3 +42,22 @@ test-all-noroot:
 fmt-check:
     cargo fmt -- --check
 
+# Быстрая установка бинарников (для отладки)
+install-local:
+    cargo build --release
+    sudo install -Dm755 target/release/squash_manager-rs /usr/bin/squash_manager-rs
+    sudo install -Dm755 target/release/zks-rs /usr/bin/zks-rs
+
+# Собрать Arch Linux пакет (с bump версии)
+pkg:
+    cargo bump patch
+    cd local_pkg && makepkg -f
+
+# Собрать и установить пакет
+pkg-install:
+    cargo bump patch
+    cd local_pkg && makepkg -fsi
+
+# Очистка артефактов сборки пакета
+pkg-clean:
+    cd local_pkg && rm -rf pkg src *.pkg.tar.zst
