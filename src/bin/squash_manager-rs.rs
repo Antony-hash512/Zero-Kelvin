@@ -1267,8 +1267,65 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     }
                 }
                 
+                // If no squashfuse found, check for LUKS mounts
+                // LUKS images are mounted via loop device -> cryptsetup -> /dev/mapper/sq_* -> mount
                 if targets.is_empty() {
-                    return Err(anyhow!("Image is not mounted (no squashfuse process found): {:?}", path));
+                    if std::env::var("RUST_LOG").is_ok() {
+                        eprintln!("DEBUG: No squashfuse found, checking for LUKS mounts...");
+                    }
+                    
+                    // Find loop device(s) associated with this file
+                    // losetup -j <file> shows: /dev/loop0: []: (<file>)
+                    if let Ok(output) = executor.run("losetup", &["-j", abs_path_str]) {
+                        if output.status.success() {
+                            let out_str = String::from_utf8_lossy(&output.stdout);
+                            for line in out_str.lines() {
+                                // Parse /dev/loopX from the output
+                                if let Some(loop_dev) = line.split(':').next() {
+                                    let loop_dev = loop_dev.trim();
+                                    if std::env::var("RUST_LOG").is_ok() {
+                                        eprintln!("DEBUG: Found loop device: {}", loop_dev);
+                                    }
+                                    
+                                    // Now find mounts from /dev/mapper/sq_* that use this loop device
+                                    // Read /proc/mounts to find mount points for sq_* mappers
+                                    if let Ok(mounts) = fs::read_to_string("/proc/mounts") {
+                                        for mount_line in mounts.lines() {
+                                            let parts: Vec<&str> = mount_line.split_whitespace().collect();
+                                            if parts.len() >= 2 {
+                                                let source = parts[0];
+                                                let mount_point = parts[1];
+                                                
+                                                // Check if it's a sq_* mapper
+                                                if source.starts_with("/dev/mapper/sq_") {
+                                                    // Verify this mapper uses our loop device
+                                                    // dmsetup table sq_* shows the backing device
+                                                    let mapper_name = source.trim_start_matches("/dev/mapper/");
+                                                    if let Ok(dm_output) = executor.run("dmsetup", &["deps", "-o", "devname", mapper_name]) {
+                                                        if dm_output.status.success() {
+                                                            let dm_str = String::from_utf8_lossy(&dm_output.stdout);
+                                                            // Output like: 1 dependencies  : (loop0)
+                                                            let loop_name = loop_dev.trim_start_matches("/dev/");
+                                                            if dm_str.contains(loop_name) {
+                                                                if std::env::var("RUST_LOG").is_ok() {
+                                                                    eprintln!("DEBUG: Found LUKS mount: {} at {}", source, mount_point);
+                                                                }
+                                                                targets.push(PathBuf::from(mount_point));
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if targets.is_empty() {
+                    return Err(anyhow!("Image is not mounted (no squashfuse or LUKS mount found): {:?}", path));
                 }
             } else {
                  return Err(anyhow!("Path is neither file nor directory: {:?}", path));
