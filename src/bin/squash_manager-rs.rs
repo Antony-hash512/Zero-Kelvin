@@ -189,10 +189,11 @@ impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
 }
 
 fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -> u32 {
-    // df -T <path>
+    // stat -f -c %T <path>
     // Output:
-    // Filesystem     Type     1K-blocks      Used Available Use% Mounted on
-    // /dev/sda1      ext4     ...
+    // ext2/ext3
+    // or
+    // tmpfs
     
     // We need to handle the case where path doesn't exist yet (use parent)
     let check_path = if path.exists() {
@@ -201,20 +202,13 @@ fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -
         path.parent().unwrap_or(&PathBuf::from(".")).to_path_buf()
     };
     
-    // Run df -T
-    if let Ok(output) = executor.run("df", &["-T", check_path.to_str().unwrap_or(".")]) {
+    // Run stat -f -c %T
+    if let Ok(output) = executor.run("stat", &["-f", "-c", "%T", check_path.to_str().unwrap_or(".")]) {
         if output.status.success() {
-             let out_str = String::from_utf8_lossy(&output.stdout);
-             // Parse 2nd line, 2nd column
-             if let Some(second_line) = out_str.lines().nth(1) {
-                 let parts: Vec<&str> = second_line.split_whitespace().collect();
-                 if parts.len() >= 2 {
-                     let fs_type = parts[1];
-                     match fs_type {
-                         "ext4" | "xfs" | "btrfs" | "zfs" | "f2fs" | "tmpfs" | "overlay" => return 50,
-                         _ => return 10,
-                     }
-                 }
+             let out_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+             match out_str.as_str() {
+                 "ext2/ext3" | "ext4" | "btrfs" | "xfs" | "zfs" | "tmpfs" | "overlay" => return 50,
+                 _ => return 10,
              }
         }
     }
@@ -1110,16 +1104,16 @@ mod tests {
                 stderr: vec![],
             }));
 
-        // 2. df -T (Overhead calc)
+        // 2. stat -f -c %T (Overhead calc)
         let parent = temp_dir.path().to_str().unwrap().to_string();
         mock.expect_run()
             .withf(move |program, args| {
-                program == "df" && args == vec!["-T", parent.as_str()]
+                program == "stat" && args == vec!["-f", "-c", "%T", parent.as_str()]
             })
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
-                stdout: b"Filesystem Type\n/dev/sda1 ext4\n".to_vec(),
+                stdout: b"ext2/ext3\n".to_vec(),
                 stderr: vec![],
             }));
 
