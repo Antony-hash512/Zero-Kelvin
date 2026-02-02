@@ -31,8 +31,7 @@ setup() {
 teardown() {
     [ "$SKIP_ROOT" = "1" ] && return
     
-    # Needs root to umount/close
-    $ROOT_CMD squash_manager-rs umount "$MOUNT_POINT" || true
+    $ROOT_CMD $ZKS_SQM_BIN umount "$MOUNT_POINT" || true
     
     # Remove mapper if left over
     # (Assuming name format sq_NAME)
