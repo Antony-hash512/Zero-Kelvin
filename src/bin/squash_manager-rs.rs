@@ -1159,29 +1159,29 @@ mod tests {
                 stderr: vec![],
             }));
             
-        // 6. unsquashfs -s (Trim size)
+        // 6. unsquashfs -s (Trim size) - called directly without sudo
         mock.expect_run()
-            .withf(|program, args| (program == "unsquashfs" || program == "sudo") && args.contains(&"unsquashfs") || args.contains(&"-s"))
+            .withf(|program, args| program == "unsquashfs" && args.contains(&"-s"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
-                stdout: b"Filesystem size 500000 bytes\n".to_vec(),
+                stdout: b"Filesystem size 500000 bytes (488.28 Kbytes / 0.48 Mbytes)\n".to_vec(),
                 stderr: vec![],
             }));
             
-        // 7. luksDump (Offset)
+        // 7. luksDump (Offset) - called directly without sudo
         mock.expect_run()
-            .withf(|program, args| (program == "cryptsetup" || program == "sudo") && args.contains(&"luksDump"))
+            .withf(|program, args| program == "cryptsetup" && args.contains(&"luksDump"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
-                stdout: b"offset: 1000000 bytes\n".to_vec(),
+                stdout: b"offset: 16777216 [bytes]\n".to_vec(),
                 stderr: vec![],
             }));
             
-        // 8. close
+        // 8. close - called directly without sudo
         mock.expect_run()
-            .withf(|program, args| (program == "cryptsetup" || program == "sudo") && args.contains(&"close"))
+            .withf(|program, args| program == "cryptsetup" && args.contains(&"close"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -1215,6 +1215,19 @@ mod tests {
 
         let mut mock = MockCommandExecutor::new();
         
+        // 0. cryptsetup isLuks (LUKS detection) - returns failure (not LUKS)
+        mock.expect_run()
+            .withf(|program, args| {
+                program == "cryptsetup" && args.len() == 2 && args[0] == "isLuks"
+            })
+            .times(1)
+            .returning(|_, _| Ok(Output {
+                status: std::process::ExitStatus::from_raw(256), // exit code 1 = not LUKS
+                stdout: vec![],
+                stderr: vec![],
+            }));
+        
+        // 1. squashfuse (for plain SquashFS)
         mock.expect_run()
             .withf(move |program, args| {
                 program == "squashfuse" &&
