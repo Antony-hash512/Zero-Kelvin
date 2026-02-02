@@ -44,3 +44,4 @@ package() {
     # Устанавливаем лицензию (обязательно для GPL в Arch, если файл в корне)
     install -Dm644 LICENSE.GPLv3 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.GPLv3"
     install -Dm644 README.md "$pkgdir/usr/share/licenses/$pkgname/README.md"
+}
