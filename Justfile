@@ -43,6 +43,7 @@ pkg-clean:
 
 # Запуск всех юнит-тестов
 unit-tests:
+    cargo check --locked || cargo update
     cargo test --locked
 
 # Запуск всех интеграционных шелл-тестов
