@@ -16,9 +16,11 @@ setup() {
     
     # 1. Create dummy data
     mkdir -p "$INPUT_DIR"
-    # Create compressible data: 10 files with same content
+    # Create compressible data: 10 files with same content, total ~5MB
+    # "yes" outputs "ZeroKelvinStazis\n" repeatedly.
+    # Each line is 17 bytes. 30000 lines * 17 bytes ~= 510KB per file.
     for i in {1..10}; do
-        yes "ZeroKelvinStazis" | head -n 1000 > "$INPUT_DIR/file_$i.txt"
+        yes "ZeroKelvinStazis" | head -n 30000 > "$INPUT_DIR/file_$i.txt"
     done
     
     # Calculate uncompressed size (approx)
