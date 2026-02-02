@@ -31,15 +31,21 @@ setup() {
 teardown() {
     [ "$SKIP_ROOT" = "1" ] && return
     
-    # --- FIX #1: Используем полный путь к бинарнику ---
-    # Needs root to umount/close
-    $ROOT_CMD "$ZKS_SQM_BIN" umount "$MOUNT_POINT" || true
+    # 1. Try to umount using the utility
+    $ROOT_CMD "$ZKS_SQM_BIN" umount "$MOUNT_POINT" 2>/dev/null || true
     
-    # Remove mapper if left over
-    # (Assuming name format sq_NAME)
-    NAME=$(basename "$OUTPUT_LUKS")
-    MAPPER="sq_${NAME%.*}" # Approximation
-    # Best effort cleanup   
+    # 2. Close ALL sq_* LUKS mappers (cleanup from any failed tests)
+    for mapper_path in /dev/mapper/sq_*; do
+        if [ -e "$mapper_path" ]; then
+            mapper_name=$(basename "$mapper_path")
+            $ROOT_CMD cryptsetup close "$mapper_name" 2>/dev/null || true
+        fi
+    done
+    
+    # 3. Detach orphaned loop devices
+    $ROOT_CMD losetup -D 2>/dev/null || true
+    
+    # 4. Remove test directory
     rm -rf "$TEST_DIR"
 }
 

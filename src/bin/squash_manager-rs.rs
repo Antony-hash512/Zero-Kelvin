@@ -550,52 +550,61 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Get FS Size
                 // unsquashfs -s /dev/mapper/...
                 if let Ok(out) = executor.run("sudo", &["unsquashfs", "-s", &mapper_path]) {
-                     let out_str = String::from_utf8_lossy(&out.stdout); // unsquashfs prints to stdout
-                     // Regex: "Filesystem size\s+([0-9]+)\s+bytes"
-                     // Quick parse logic
-                     if let Some(pos) = out_str.find("Filesystem size") {
-                         let rest = &out_str[pos..];
-                         if let Some(line) = rest.lines().next() {
-                             // "Filesystem size 1234 bytes"
+                     let out_str = String::from_utf8_lossy(&out.stdout);
+                     
+                     // unsquashfs outputs two lines with "Filesystem size":
+                     // 1. "Filesystem size 726.11 Kbytes (0.71 Mbytes)" - human readable
+                     // 2. "Filesystem size 743538 bytes (726.11 Kbytes / 0.71 Mbytes)" - raw bytes
+                     // We need the second one (contains "bytes (")
+                     let mut fs_bytes: Option<u64> = None;
+                     for line in out_str.lines() {
+                         if line.contains("Filesystem size") && line.contains("bytes (") {
+                             // "Filesystem size 743538 bytes (726.11 Kbytes / 0.71 Mbytes)"
                              let parts: Vec<&str> = line.split_whitespace().collect();
-                             if parts.len() >= 3 {
+                             // parts[0]="Filesystem" parts[1]="size" parts[2]="743538" parts[3]="bytes"
+                             if parts.len() >= 4 && parts[3] == "bytes" {
                                  if let Ok(bytes) = parts[2].parse::<u64>() {
-                                      // Get Offset
-                                      if let Ok(dump) = executor.run("sudo", &["cryptsetup", "luksDump", output_str]) {
-                                          let dump_str = String::from_utf8_lossy(&dump.stdout);
-                                          let mut offset: u64 = 0;
-                                          // LUKS2: "offset: 16777216 [bytes]"
-                                          for line in dump_str.lines() {
-                                              if line.trim().starts_with("offset:") && line.contains("bytes") {
-                                                  if let Some(val_str) = line.split_whitespace().nth(1) {
-                                                      if let Ok(val) = val_str.parse::<u64>() {
-                                                          offset = val;
-                                                          break;
-                                                      }
-                                                  }
-                                              }
-                                              // LUKS1: "Payload offset: 4096" (sectors)
-                                              if line.trim().starts_with("Payload offset:") {
-                                                  if let Some(val_str) = line.split_whitespace().nth(2) {
-                                                      if let Ok(sect) = val_str.parse::<u64>() {
-                                                          offset = sect * 512;
-                                                          break;
-                                                      }
-                                                  }
-                                              }
-                                          }
-                                          
-                                          if offset > 0 {
-                                               // Calc total
-                                               let raw_trim = bytes + offset + 1024*1024; // +1MB
-                                               // Align to 4096
-                                               let aligned = ((raw_trim + 4095) / 4096) * 4096;
-                                               trim_size = Some(aligned);
-                                          }
-                                      }
+                                     fs_bytes = Some(bytes);
+                                     break;
                                  }
                              }
                          }
+                     }
+                     
+                     if let Some(bytes) = fs_bytes {
+                          // Get Offset
+                          if let Ok(dump) = executor.run("sudo", &["cryptsetup", "luksDump", output_str]) {
+                              let dump_str = String::from_utf8_lossy(&dump.stdout);
+                              let mut offset: u64 = 0;
+                              // LUKS2: "offset: 16777216 [bytes]"
+                              for line in dump_str.lines() {
+                                  if line.trim().starts_with("offset:") && line.contains("bytes") {
+                                      if let Some(val_str) = line.split_whitespace().nth(1) {
+                                          if let Ok(val) = val_str.parse::<u64>() {
+                                              offset = val;
+                                              break;
+                                          }
+                                      }
+                                  }
+                                  // LUKS1: "Payload offset: 4096" (sectors)
+                                  if line.trim().starts_with("Payload offset:") {
+                                      if let Some(val_str) = line.split_whitespace().nth(2) {
+                                          if let Ok(sect) = val_str.parse::<u64>() {
+                                              offset = sect * 512;
+                                              break;
+                                          }
+                                      }
+                                  }
+                              }
+                              
+                              if offset > 0 {
+                                   // Calc total
+                                   let raw_trim = bytes + offset + 1024*1024; // +1MB safety margin
+                                   // Align to 4096
+                                   let aligned = ((raw_trim + 4095) / 4096) * 4096;
+                                   trim_size = Some(aligned);
+                              }
+                          }
                      }
                 }
 
