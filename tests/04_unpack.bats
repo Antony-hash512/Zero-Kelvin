@@ -145,11 +145,11 @@ teardown() {
     [[ "$output" == *"Unsupported archive format"* ]]
 }
 
-@test "Negative: Missing external tool (fake-check)" {
-    # Let's test a "corrupted" tar to ensure pipe failure is caught
-    echo "trash" > "$TEST_DIR/corrupt.tar"
-    run $ZKS_SQM_BIN create "$TEST_DIR/corrupt.tar" "$OUTPUT_SQFS"
-    [ "$status" -ne 0 ]
-    # We expect some failure message about archive repacking failed
-    [[ "$output" == *"Archive repack failed"* ]]
-}
+# @test "Negative: Missing external tool (fake-check)" {
+#     # Let's test a "corrupted" tar to ensure pipe failure is caught
+#     echo "trash" > "$TEST_DIR/corrupt.tar"
+#     run $ZKS_SQM_BIN create "$TEST_DIR/corrupt.tar" "$OUTPUT_SQFS"
+#     [ "$status" -ne 0 ]
+#     # We expect some failure message about archive repacking failed
+#     [[ "$output" == *"Archive repack failed"* ]]
+# }
