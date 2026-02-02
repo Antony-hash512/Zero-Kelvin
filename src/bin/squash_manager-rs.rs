@@ -309,6 +309,40 @@ fn get_effective_root_cmd() -> Vec<String> {
     vec!["sudo".to_string()]
 }
 
+/// Check if the image file is a LUKS container
+/// Note: cryptsetup isLuks only reads the file header and doesn't require root privileges
+fn is_luks_image(image_path: &PathBuf, executor: &impl CommandExecutor) -> bool {
+    let img_str = match image_path.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+    
+    // Run cryptsetup isLuks directly (no sudo needed - just reads file header)
+    if let Ok(output) = executor.run("cryptsetup", &["isLuks", img_str]) {
+        output.status.success()
+    } else {
+        false
+    }
+}
+
+
+/// Generate mapper name from image basename (sanitized)
+fn generate_mapper_name(image_path: &PathBuf) -> String {
+    let basename = image_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    
+    // Sanitize: replace dots with underscores, keep alphanumeric and underscore
+    let sanitized = basename
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect::<String>();
+    
+    format!("sq_{}", sanitized)
+}
+
+
 /// Main logic entry point with dependency injection
 pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<()> {
     match args.command {
@@ -701,7 +735,6 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         .as_secs();
                     
                     // Simple random suffix to avoid collisions
-                    // rand 0.9 usage
                     let random_suffix: u32 = rand::rng().random_range(100000..999999);
                     
                     let dir_name = format!("{}_{}_{}", prefix, timestamp, random_suffix);
@@ -714,11 +747,104 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             
             fs::create_dir_all(&target_mount_point).context("Failed to create mount point")?;
             
+            // Check if this is a LUKS container
+            if is_luks_image(&image, executor) {
+                println!("Detected LUKS container. Opening encrypted image...");
+                
+                let mapper_name = generate_mapper_name(&image);
+                let mapper_path = format!("/dev/mapper/{}", mapper_name);
+                let root_cmd = get_effective_root_cmd();
+                
+                // Check if mapper already exists
+                if PathBuf::from(&mapper_path).exists() {
+                    println!("Mapper device already exists. Attempting to mount...");
+                    
+                    // Try mounting existing mapper
+                    let mut mount_args = root_cmd.clone();
+                    mount_args.extend(vec![
+                        "mount".to_string(),
+                        "-t".to_string(),
+                        "squashfs".to_string(),
+                        mapper_path.clone(),
+                        target_mount_point.to_str().unwrap().to_string(),
+                    ]);
+                    
+                    let prog = mount_args.remove(0);
+                    let args_refs: Vec<&str> = mount_args.iter().map(|s| s.as_str()).collect();
+                    
+                    if let Ok(output) = executor.run(&prog, &args_refs) {
+                        if output.status.success() {
+                            println!("Mounted at {}", target_mount_point.display());
+                            return Ok(());
+                        }
+                    }
+                    
+                    // Stale mapper - close and retry
+                    println!("Mount failed (stale mapper?). Closing and retrying...");
+                    let mut close_args = root_cmd.clone();
+                    close_args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper_name.clone()]);
+                    
+                    let close_prog = close_args.remove(0);
+                    let close_refs: Vec<&str> = close_args.iter().map(|s| s.as_str()).collect();
+                    let _ = executor.run(&close_prog, &close_refs);
+                }
+                
+                // Open LUKS container (interactive - will ask for password)
+                println!("Opening encrypted container (password required)...");
+                let mut open_args = root_cmd.clone();
+                open_args.extend(vec![
+                    "cryptsetup".to_string(),
+                    "open".to_string(),
+                    image.to_str().unwrap().to_string(),
+                    mapper_name.clone(),
+                ]);
+                
+                let open_prog = open_args.remove(0);
+                let open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
+                
+                let status = executor.run_interactive(&open_prog, &open_refs)
+                    .context("Failed to execute cryptsetup open")?;
+                
+                if !status.success() {
+                    return Err(anyhow!("Failed to open encrypted container"));
+                }
+                
+                // Mount the mapper device
+                let mut mount_args = root_cmd.clone();
+                mount_args.extend(vec![
+                    "mount".to_string(),
+                    "-t".to_string(),
+                    "squashfs".to_string(),
+                    mapper_path.clone(),
+                    target_mount_point.to_str().unwrap().to_string(),
+                ]);
+                
+                let mount_prog = mount_args.remove(0);
+                let mount_refs: Vec<&str> = mount_args.iter().map(|s| s.as_str()).collect();
+                
+                let output = executor.run(&mount_prog, &mount_refs)?;
+                
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    // Cleanup: close the mapper we just opened
+                    let mut close_args = root_cmd.clone();
+                    close_args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper_name]);
+                    let close_prog = close_args.remove(0);
+                    let close_refs: Vec<&str> = close_args.iter().map(|s| s.as_str()).collect();
+                    let _ = executor.run(&close_prog, &close_refs);
+                    
+                    return Err(anyhow!("Mount failed: {}", stderr));
+                }
+                
+                println!("Mounted at {}", target_mount_point.display());
+                return Ok(());
+            }
+            
+            // Plain SquashFS - use squashfuse (no root required)
             let mp_str = target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?;
             let img_str = image.to_str().ok_or(anyhow!("Invalid image path"))?;
             
-            // Added -o nonempty to allow mounting over non-empty directories (if user desires/auto-gen collision)
-            // This fixes BATS tests where we test "keep dir" scenarios or if auto-gen collides (rarely).
+            // Added -o nonempty to allow mounting over non-empty directories
             let output = executor.run("squashfuse", &["-o", "nonempty", img_str, mp_str])?;
             
              if !output.status.success() {
@@ -729,14 +855,12 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             Ok(())
         },
 
+
         Commands::Umount { mount_point } => {
             let path = &mount_point;
             
             if !path.exists() {
-                 // return Err(anyhow!("Path does not exist: {:?}", path));
-                 // Relax check: if user passed a file path that *used* to exist but maybe was deleted?
-                 // But requirements say "path to image". If image doesn't exist, we can't be sure what they meant.
-                 return Err(anyhow!("Path does not exist: {:?}", path));
+                return Err(anyhow!("Path does not exist: {:?}", path));
             }
 
             let mut targets = Vec::new();
@@ -805,11 +929,66 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             for target in targets {
                 let target_str = target.to_str().ok_or(anyhow!("Invalid target path"))?;
                 
-                let output = executor.run("fusermount", &["-u", target_str])?;
+                // Detect source device using findmnt (doesn't need root - just reads /proc/mounts)
+                let mut source_device: Option<String> = None;
                 
-                if !output.status.success() {
-                     let stderr = String::from_utf8_lossy(&output.stderr);
-                     return Err(anyhow!("fusermount failed for {:?}: {}", target, stderr));
+                if let Ok(output) = executor.run("findmnt", &["-n", "-o", "SOURCE", target_str]) {
+                    if output.status.success() {
+                        source_device = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
+                    }
+                }
+                
+                // Get root_cmd only if needed (for LUKS unmount operations)
+                let root_cmd = get_effective_root_cmd();
+
+                
+                // Determine unmount method based on source device
+                let is_luks_mapper = source_device.as_ref()
+                    .map(|dev| dev.starts_with("/dev/mapper/sq_"))
+                    .unwrap_or(false);
+                
+                if is_luks_mapper {
+                    // LUKS mount - use sudo umount
+                    println!("Unmounting LUKS mapper...");
+                    let mut umount_args = root_cmd.clone();
+                    umount_args.extend(vec!["umount".to_string(), target_str.to_string()]);
+                    
+                    let prog = umount_args.remove(0);
+                    let args_refs: Vec<&str> = umount_args.iter().map(|s| s.as_str()).collect();
+                    
+                    let output = executor.run(&prog, &args_refs)?;
+                    
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(anyhow!("umount failed for {:?}: {}", target, stderr));
+                    }
+                    
+                    // Close LUKS mapper
+                    if let Some(dev) = source_device {
+                        let mapper_name = dev.trim_start_matches("/dev/mapper/");
+                        println!("Closing LUKS container {}...", mapper_name);
+                        
+                        let mut close_args = root_cmd.clone();
+                        close_args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper_name.to_string()]);
+                        
+                        let close_prog = close_args.remove(0);
+                        let close_refs: Vec<&str> = close_args.iter().map(|s| s.as_str()).collect();
+                        
+                        let output = executor.run(&close_prog, &close_refs)?;
+                        
+                        if !output.status.success() {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            eprintln!("Warning: Failed to close LUKS mapper: {}", stderr);
+                        }
+                    }
+                } else {
+                    // Plain squashfuse mount - use fusermount -u
+                    let output = executor.run("fusermount", &["-u", target_str])?;
+                    
+                    if !output.status.success() {
+                         let stderr = String::from_utf8_lossy(&output.stderr);
+                         return Err(anyhow!("fusermount failed for {:?}: {}", target, stderr));
+                    }
                 }
                 
                 // Post-unmount cleanup: remove directory if empty
