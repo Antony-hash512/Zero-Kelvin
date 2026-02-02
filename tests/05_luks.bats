@@ -49,9 +49,7 @@ teardown() {
     OUTPUT_NO_COMP="$TEST_DIR/enc_no_comp.sqfs"
     OUTPUT_HIGH_COMP="$TEST_DIR/enc_high_comp.sqfs"
     
-    # 1. Create with -c 0 (No compression - if implemented, currently default is zstd)
-    # Using specific compression level 1 for now if 0 is not supported yet, 
-    # BUT user asked to test -c 0 feature. Assuming we will implement it.
+    # 1. Create with -c 0 (No compression - creates a large file)
     run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_NO_COMP" -e -c 0 --no-progress
     [ "$status" -eq 0 ]
     
