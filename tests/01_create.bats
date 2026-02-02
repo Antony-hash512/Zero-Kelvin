@@ -66,3 +66,13 @@ teardown() {
     echo "DEBUG output: [$output]" >&3
     assert_output --partial "compression-level $default_comp"
 }
+
+@test "Smoke: Создание архива без сжатия (-c 0)" {
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/nocomp.sqfs" -c 0 --no-progress
+    assert_success
+    [ -f "$TEST_DIR/nocomp.sqfs" ]
+    
+    # Проверка, что файл действительно создан и читается
+    run file "$TEST_DIR/nocomp.sqfs"
+    assert_output --partial "Squashfs filesystem"
+}

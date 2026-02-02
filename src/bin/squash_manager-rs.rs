@@ -62,6 +62,43 @@ impl SquashManagerArgs {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum CompressionMode {
+    None,
+    Zstd(u32),
+}
+
+impl CompressionMode {
+    fn from_level(level: u32) -> Self {
+        if level == 0 {
+            Self::None
+        } else {
+            Self::Zstd(level)
+        }
+    }
+
+    fn apply_to_mksquashfs<'a>(&self, args: &mut Vec<&'a str>, temp_level: &'a str) {
+        match self {
+            Self::None => {
+                args.push("-no-compression");
+            }
+            Self::Zstd(_) => {
+                args.push("-comp");
+                args.push("zstd");
+                args.push("-Xcompression-level");
+                args.push(temp_level);
+            }
+        }
+    }
+
+    fn get_tar2sqfs_compressor_flag(&self) -> Result<String> {
+        match self {
+            Self::None => Err(anyhow!("Archive repacking does not support uncompressed mode (tar2sqfs limitation)")),
+            Self::Zstd(_) => Ok("-c zstd".to_string()),
+        }
+    }
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
     /// Create a new SquashFS archive from a directory or existing archive
@@ -179,6 +216,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 return Err(anyhow!("Encryption support will be added in Stage 4"));
             }
 
+            // Define compression strategy
+            let comp_mode = CompressionMode::from_level(compression);
+
+
             // 1. Check if input exists
             if !input_path.exists() {
                 return Err(anyhow!("Input path does not exist: {:?}", input_path));
@@ -219,13 +260,17 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     return Err(anyhow!("Unsupported archive format: {}", file_name));
                 };
 
+                // Determine compressor flag for tar2sqfs
+                let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
+
                 // Construct pipeline: decompressor input | tar2sqfs options output
                 // Using explicit quoting for paths to handle spaces safely in sh -c
+                // Fixed: Do not pass compression level to -j (threads), use -c <compressor>
                 let cmd = format!(
-                    "{} '{}' | tar2sqfs --quiet --no-skip --force -c zstd -j {} '{}'",
+                    "{} '{}' | tar2sqfs --quiet --no-skip --force {} '{}'",
                     decompressor,
                     input_str.replace("'", "'\\''"), // Escape single quotes in path
-                    compression,
+                    compressor_flag,
                     output_str.replace("'", "'\\''")
                 );
 
@@ -257,12 +302,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 cmd_args.push("-no-progress");
             }
 
-            cmd_args.push("-comp");
-            cmd_args.push("zstd");
-
-            cmd_args.push("-Xcompression-level");
             let comp_level_str = compression.to_string();
-            cmd_args.push(&comp_level_str);
+            comp_mode.apply_to_mksquashfs(&mut cmd_args, &comp_level_str);
 
             let output = executor.run("mksquashfs", &cmd_args)?;
 
@@ -556,5 +597,68 @@ mod tests {
         env::set_current_dir(&orig_cwd).unwrap();
         
         assert!(result.is_ok());
+    }
+
+
+    #[test]
+    fn test_compression_mode_logic() {
+        // Test None
+        let mode_none = CompressionMode::from_level(0);
+        assert_eq!(mode_none, CompressionMode::None);
+        
+        let mut args = vec![];
+        let dummy_level = "0";
+        mode_none.apply_to_mksquashfs(&mut args, dummy_level);
+        assert_eq!(args, vec!["-no-compression"]);
+
+        assert!(mode_none.get_tar2sqfs_compressor_flag().is_err());
+
+        // Test Zstd
+        let mode_zstd = CompressionMode::from_level(15);
+        assert_eq!(mode_zstd, CompressionMode::Zstd(15));
+        
+        let mut args2 = vec![];
+        let level_str = "15";
+        mode_zstd.apply_to_mksquashfs(&mut args2, level_str);
+        assert_eq!(args2, vec!["-comp", "zstd", "-Xcompression-level", "15"]);
+
+        assert_eq!(mode_zstd.get_tar2sqfs_compressor_flag().unwrap(), "-c zstd");
+    }
+
+    #[test]
+    fn test_create_directory_with_no_compression() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_path = temp_dir.path().to_path_buf();
+        let input_path_check = input_path.to_str().unwrap().to_string();
+
+        let mut mock = MockCommandExecutor::new();
+        // Expectation: mksquashfs input output -no-progress -no-compression
+        mock.expect_run()
+            .withf(move |program, args| {
+                 program == "mksquashfs" &&
+                 args.len() == 4 && // input, output, -no-progress, -no-compression
+                 args[0] == input_path_check &&
+                 args[1] == "output_no_comp.sqfs" &&
+                 args[2] == "-no-progress" &&
+                 args[3] == "-no-compression"
+            })
+            .times(1)
+            .returning(|_, _| Ok(Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            }));
+
+        let args = SquashManagerArgs {
+            command: Commands::Create {
+                input_path: input_path,
+                output_path: Some(PathBuf::from("output_no_comp.sqfs")),
+                encrypt: false,
+                compression: 0,
+                no_progress: true,
+            },
+        };
+
+        run(args, &mock).unwrap();
     }
 }
