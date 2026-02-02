@@ -1,13 +1,39 @@
 #!/usr/bin/env fish
 
 # --- ШАГ 0: Парсинг аргументов ---
-argparse 'build' 'no-build' 'build-release' -- $argv
+argparse 'build' 'no-build' 'build-release' 'no-root' -- $argv
 or exit 1
 
 if set -q _flag_build_release
     set TEST_TARGET "release"
 else
     set TEST_TARGET "debug"
+end
+
+# ... (skip to ShAG 2.5) ...
+
+# --- ШАГ 2.5: Определение прав Root для тестов ---
+# По умолчанию пропускаем
+set -x SKIP_ROOT "1"
+set -x ROOT_CMD ""
+
+if set -q _flag_build_release
+    echo "Release mode: Root tests disabled for safety."
+else if set -q _flag_no_root
+    echo "Flag --no-root detected: Root tests DISABLED."
+else if test (id -u) -eq 0
+    echo "Running as Root: Root tests ENABLED."
+    set -x SKIP_ROOT "0"
+    set -x ROOT_CMD ""
+else
+    # Пробуем sudo без пароля
+    if sudo -n true 2>/dev/null
+        echo "Sudo (nopasswd) available: Root tests ENABLED."
+        set -x SKIP_ROOT "0"
+        set -x ROOT_CMD "sudo"
+    else
+        echo "Root/Sudo not available: Root tests DISABLED."
+    end
 end
 
 # --- ШАГ 1: Вычисляем абсолютные пути ---
@@ -51,6 +77,7 @@ if string match -qi "y" "$build_choice"
     end
 end
 
+
 # --- ШАГ 3: Запуск тестов ---
 
 function run_colored_bats
@@ -80,3 +107,5 @@ and run_colored_bats tests/02_mount.bats
 and run_colored_bats tests/03_umount.bats
 
 and run_colored_bats tests/04_unpack.bats
+
+and run_colored_bats tests/05_luks.bats

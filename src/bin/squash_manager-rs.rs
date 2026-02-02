@@ -278,7 +278,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     eprintln!("DEBUG: Executing pipeline: {}", cmd);
                 }
 
-                let output = executor.run("sh", &["-c", &cmd])?;
+                // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
+                let output = executor.run("sh", &["-c", &format!("set -o pipefail; {}", cmd)])?;
 
                 if !output.status.success() {
                      let stderr = String::from_utf8_lossy(&output.stderr);

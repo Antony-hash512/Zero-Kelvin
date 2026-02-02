@@ -131,3 +131,25 @@ teardown() {
     run unsquashfs -l "$OUTPUT_SQFS"
     [[ "$output" == *"input_data/file1.txt"* ]]
 }
+
+@test "Negative: Input path does not exist" {
+    run $ZKS_SQM_BIN create "$TEST_DIR/non_existent.tar" "$OUTPUT_SQFS"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Input path does not exist"* ]]
+}
+
+@test "Negative: Unsupported archive format" {
+    touch "$TEST_DIR/bad.xyz"
+    run $ZKS_SQM_BIN create "$TEST_DIR/bad.xyz" "$OUTPUT_SQFS"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unsupported archive format"* ]]
+}
+
+@test "Negative: Missing external tool (fake-check)" {
+    # Let's test a "corrupted" tar to ensure pipe failure is caught
+    echo "trash" > "$TEST_DIR/corrupt.tar"
+    run $ZKS_SQM_BIN create "$TEST_DIR/corrupt.tar" "$OUTPUT_SQFS"
+    [ "$status" -ne 0 ]
+    # We expect some failure message about archive repacking failed
+    [[ "$output" == *"Archive repack failed"* ]]
+}
