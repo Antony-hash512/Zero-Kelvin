@@ -76,3 +76,35 @@ teardown() {
     run file "$TEST_DIR/nocomp.sqfs"
     assert_output --partial "Squashfs filesystem"
 }
+
+@test "Logic: Эффективность отключения сжатия (-c 0 vs -c 1)" {
+    # 1. Генерируем хорошо сжимаемые данные (текстовый паттерн)
+    # 10 файлов по ~85KB = ~850KB данных
+    mkdir -p "$SRC/compressible"
+    for i in {1..10}; do
+        yes "ZeroKelvinStazis_Test_String" | head -n 5000 > "$SRC/compressible/file_$i.txt"
+    done
+
+    # 2. Создаем сжатый архив (используем fast compression -c 1)
+    run $ZKS_SQM_BIN create "$SRC/compressible" "$TEST_DIR/compressed.sqfs" -c 1 --no-progress
+    assert_success
+
+    # 3. Создаем НЕсжатый архив (-c 0)
+    run $ZKS_SQM_BIN create "$SRC/compressible" "$TEST_DIR/nocomp.sqfs" -c 0 --no-progress
+    assert_success
+
+    # 4. Сравниваем размеры
+    local size_comp=$(stat -c%s "$TEST_DIR/compressed.sqfs")
+    local size_nocomp=$(stat -c%s "$TEST_DIR/nocomp.sqfs")
+
+    echo "Size Compressed (-c 1): $size_comp" >&3
+    echo "Size Uncompressed (-c 0): $size_nocomp" >&3
+
+    # Несжатый должен быть существенно больше
+    # (Для сжимаемых данных разница будет в разы)
+    [ "$size_nocomp" -gt "$size_comp" ]
+
+    # 5. Проверяем метаданные (опционально, зависит от версии mksquashfs)
+    # Обычно при отсутствии сжатия unsquashfs пишет "gzip" (как дефолт метаданных)
+    # или "no compression". Главное — проверка размера выше.
+}
