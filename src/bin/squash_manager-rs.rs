@@ -1,9 +1,10 @@
 use anyhow::{Result, anyhow, Context};
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
@@ -688,39 +689,90 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     eprintln!("DEBUG: Executing pipeline: {}", cmd);
                 }
 
-                // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
-                let output = executor.run("sh", &["-c", &format!("set -o pipefail; {}", cmd)])?;
+                // Get input file size for display
+                let input_size = fs::metadata(&input_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                let input_size_mb = input_size as f64 / 1024.0 / 1024.0;
 
-                if !output.status.success() {
-                     let stderr = String::from_utf8_lossy(&output.stderr);
-                     return Err(anyhow!("Archive repack failed: {}", stderr));
+                // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
+                let full_cmd = format!("set -o pipefail; {}", cmd);
+                
+                if no_progress {
+                    // Silent mode
+                    let output = executor.run("sh", &["-c", &full_cmd])?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(anyhow!("Archive repack failed: {}", stderr));
+                    }
+                } else {
+                    // Progress mode: show spinner with file info
+                    let pb = ProgressBar::new_spinner();
+                    pb.set_style(
+                        ProgressStyle::with_template(
+                            "{spinner:.cyan} [{elapsed_precise}] {msg}"
+                        )
+                        .unwrap()
+                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                    );
+                    pb.set_message(format!(
+                        "Repacking {:.1} MB archive → SquashFS...",
+                        input_size_mb
+                    ));
+                    pb.enable_steady_tick(Duration::from_millis(80));
+
+                    let output = executor.run("sh", &["-c", &full_cmd])?;
+                    
+                    if output.status.success() {
+                        pb.finish_with_message(format!(
+                            "✓ Repacked {:.1} MB archive successfully",
+                            input_size_mb
+                        ));
+                    } else {
+                        pb.finish_with_message("✗ Archive repack failed");
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(anyhow!("Archive repack failed: {}", stderr));
+                    }
                 }
                 
                 return Ok(());
             }
 
             // 3. Standard Directory Packing (Directory -> SquashFS)
-            let mut cmd_args = vec![
-                input_path.to_str().ok_or(anyhow!("Invalid input path"))?,
-                output_path
-                    .as_ref()
-                    .ok_or(anyhow!("Output path required"))?
-                    .to_str()
-                    .ok_or(anyhow!("Invalid output path"))?,
-            ];
+            let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
+            let output_str = output_path
+                .as_ref()
+                .ok_or(anyhow!("Output path required"))?
+                .to_str()
+                .ok_or(anyhow!("Invalid output path"))?;
 
+            let mut cmd_args = vec![input_str, output_str];
+
+            // Progress control: use -info for verbose progress or -no-progress to hide
             if no_progress {
                 cmd_args.push("-no-progress");
+            } else {
+                cmd_args.push("-info");
             }
 
             let comp_level_str = compression.to_string();
             comp_mode.apply_to_mksquashfs(&mut cmd_args, &comp_level_str);
 
-            let output = executor.run("mksquashfs", &cmd_args)?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow!("mksquashfs failed: {}", stderr));
+            // When progress is enabled, use run_interactive to show mksquashfs output in real-time
+            if no_progress {
+                // Silent mode: capture output
+                let output = executor.run("mksquashfs", &cmd_args)?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(anyhow!("mksquashfs failed: {}", stderr));
+                }
+            } else {
+                // Interactive mode: show progress in real-time
+                let status = executor.run_interactive("mksquashfs", &cmd_args)
+                    .context("Failed to execute mksquashfs")?;
+                if !status.success() {
+                    return Err(anyhow!("mksquashfs failed"));
+                }
             }
 
             Ok(())
