@@ -43,30 +43,6 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
-@test "LUKS: Truncate optimization (-c 0 vs -c 19)" {
-    [ "$SKIP_ROOT" = "1" ] && skip
-    
-    OUTPUT_NO_COMP="$TEST_DIR/enc_no_comp.sqfs"
-    OUTPUT_HIGH_COMP="$TEST_DIR/enc_high_comp.sqfs"
-    
-    # 1. Create with -c 0 (No compression - creates a large file)
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_NO_COMP" -e -c 0 --no-progress
-    [ "$status" -eq 0 ]
-    
-    # 2. Create with -c 19 (High compression)
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_HIGH_COMP" -e -c 19 --no-progress
-    [ "$status" -eq 0 ]
-    
-    # 3. Compare sizes
-    SIZE_LG=$(stat -c%s "$OUTPUT_NO_COMP")
-    SIZE_SM=$(stat -c%s "$OUTPUT_HIGH_COMP")
-    
-    echo "Size (No Comp): $SIZE_LG" >&3
-    echo "Size (High Comp): $SIZE_SM" >&3
-    
-    # High comp should be significantly smaller
-    [ "$SIZE_SM" -lt "$SIZE_LG" ]
-}
 
 @test "LUKS: Integrity Round-Trip (Encrypt -> Mount -> Verify)" {
     [ "$SKIP_ROOT" = "1" ] && skip
@@ -136,4 +112,29 @@ teardown() {
          echo "Mapper $MAPPER_NAME still exists after umount!" >&3
          [ "1" -eq "0" ]
     fi
+}
+
+@test "LUKS: Truncate optimization (-c 0 vs -c 19)" {
+    [ "$SKIP_ROOT" = "1" ] && skip
+    
+    OUTPUT_NO_COMP="$TEST_DIR/enc_no_comp.sqfs"
+    OUTPUT_HIGH_COMP="$TEST_DIR/enc_high_comp.sqfs"
+    
+    # 1. Create with -c 0 (No compression - creates a large file)
+    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_NO_COMP" -e -c 0 --no-progress
+    [ "$status" -eq 0 ]
+    
+    # 2. Create with -c 19 (High compression)
+    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_HIGH_COMP" -e -c 19 --no-progress
+    [ "$status" -eq 0 ]
+    
+    # 3. Compare sizes
+    SIZE_LG=$(stat -c%s "$OUTPUT_NO_COMP")
+    SIZE_SM=$(stat -c%s "$OUTPUT_HIGH_COMP")
+    
+    echo "Size (No Comp): $SIZE_LG" >&3
+    echo "Size (High Comp): $SIZE_SM" >&3
+    
+    # High comp should be significantly smaller
+    [ "$SIZE_SM" -lt "$SIZE_LG" ]
 }
