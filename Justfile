@@ -27,11 +27,13 @@ install-local:
 # Собрать Arch Linux пакет (с bump версии)
 pkg:
     cargo bump patch
+    cargo check --locked || cargo update --workspace
     cd local_pkg && makepkg -f
 
 # Собрать и установить пакет
 pkg-install:
     cargo bump patch
+    cargo check --locked || cargo update --workspace
     cd local_pkg && makepkg -fsi
 
 # Очистка артефактов сборки пакета
