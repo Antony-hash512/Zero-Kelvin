@@ -1,5 +1,5 @@
-# Maintainer: fireice <your_email>
-pkgname=zero-kelvin-stazis-git
+# Maintainer: Antony-hash512
+pkgname=zks-rs-local-git
 pkgver=$(grep '^version =' ../Cargo.toml | cut -d '"' -f 2)
 pkgrel=1
 pkgdesc="Cold storage backup utility (Rust port)"
@@ -19,45 +19,41 @@ source=()
 md5sums=()
 
 prepare() {
-    # 1. Очищаем целевую папку
+    # Очищаем целевую папку
     rm -rf "$srcdir/$pkgname"
     mkdir -p "$srcdir/$pkgname"
-   
-    # 2. Копируем файлы из корня проекта (Cargo.toml, Justfile, *.md)
-    # Используем find с maxdepth 1, чтобы взять только файлы
-    #find "$_projectdir" -maxdepth 1 -type f -not -name '.*' -exec cp -t "$srcdir/$pkgname/" {} +
-    
-    # 3. Копируем нужные папки ЯВНО
-    # Это гарантирует, что мы не скопируем случайно local_pkg, target или .git
+ 
+    # Копируем нужные каталоги и файлы
     cp -r "$_projectdir/src" "$srcdir/$pkgname/"
     cp -r "$_projectdir/tests" "$srcdir/$pkgname/"
-    cp -r "$_projectdir/Cargo.toml" "$srcdir/$pkgname/"
-    cp -r "$_projectdir/Cargo.lock" "$srcdir/$pkgname/"
-    cp -r "$_projectdir/Justfile" "$srcdir/$pkgname/"
-    cp -r "$_projectdir/README.md" "$srcdir/$pkgname/"
-    cp -r "$_projectdir/LICENSE.GPLv3" "$srcdir/$pkgname/"
+
+    cp "$_projectdir/Cargo.toml" "$srcdir/$pkgname/"
+    cp "$_projectdir/Cargo.lock" "$srcdir/$pkgname/"
+    cp "$_projectdir/Justfile" "$srcdir/$pkgname/"
+    cp "$_projectdir/README.md" "$srcdir/$pkgname/"
+    cp "$_projectdir/LICENSE.GPLv3" "$srcdir/$pkgname/"
     
     echo "DEBUG: Copied source structure:"
     ls -F "$srcdir/$pkgname/"
 }
 
-options=(!debug)
+options=(!debug !lto)
 
 
 build() {
     cd "$srcdir/$pkgname"
     export RUSTUP_TOOLCHAIN=stable
     # Явно указываем папку для артефактов внутри временного каталога
-    export CARGO_TARGET_DIR="target"
+    export CARGO_TARGET_DIR="$srcdir/$pkgname/target"
     cargo build --release --locked
 }
 
 check() {
     cd "$srcdir/$pkgname"
-    export CARGO_TARGET_DIR="target"
+    export CARGO_TARGET_DIR="$srcdir/$pkgname/target"
     cargo test --release --locked
     
-    # 2. Запуск интеграционных тестов на бинарниках, которые мы только что собрали
+    # Запуск интеграционных тестов на бинарниках, которые мы только что собрали
     # Используем --no-build-release, так как release-бинарники уже собраны в этапе build()
     fish tests/run_shell_tests.fish --no-build-release --no-root
 }
