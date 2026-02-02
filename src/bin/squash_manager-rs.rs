@@ -34,7 +34,8 @@ impl SquashManagerArgs {
     Options:
       -e, --encrypt         Create an encrypted LUKS container (Requires root/sudo).
       -c, --compression N   Zstd compression level (default: {0}).
-      --no-progress         Disable variable progress bar.
+      --no-progress         Disable progress bar completely.
+      --vanilla-progress    Use native mksquashfs output (directories only).
 
     Supported Input Formats (repacked on-the-fly via pipe):
       - Directory: Standard behavior
@@ -120,9 +121,13 @@ pub enum Commands {
         #[arg(short, long, default_value_t = DEFAULT_ZSTD_COMPRESSION)]
         compression: u32,
 
-        /// Disable variable progress bar
+        /// Disable progress bar completely
         #[arg(long)]
         no_progress: bool,
+
+        /// Use native mksquashfs progress output instead of custom progress bar (directories only)
+        #[arg(long)]
+        vanilla_progress: bool,
     },
     /// Mount a SquashFS archive to a directory (using squashfuse)
     Mount {
@@ -185,6 +190,38 @@ impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
              if self.output_path.exists() {
                  let _ = fs::remove_file(self.output_path);
              }
+        }
+    }
+}
+
+/// Helper to ensure output files are cleaned up on failure or interruption (RAII)
+/// Used for plain (non-LUKS) archive creation
+struct CreateTransaction {
+    output_path: PathBuf,
+    success: bool,
+}
+
+impl CreateTransaction {
+    fn new(output_path: PathBuf) -> Self {
+        Self {
+            output_path,
+            success: false,
+        }
+    }
+
+    fn set_success(&mut self) {
+        self.success = true;
+    }
+}
+
+impl Drop for CreateTransaction {
+    fn drop(&mut self) {
+        if !self.success {
+            // Remove the incomplete file if we failed
+            if self.output_path.exists() {
+                eprintln!("\nCleaning up incomplete file: {:?}", self.output_path);
+                let _ = fs::remove_file(&self.output_path);
+            }
         }
     }
 }
@@ -347,6 +384,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             encrypt,
             compression,
             no_progress,
+            vanilla_progress,
         } => {
             // Define compression strategy
             let comp_mode = CompressionMode::from_level(compression);
@@ -695,6 +733,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     .unwrap_or(0);
                 let input_size_mb = input_size as f64 / 1024.0 / 1024.0;
 
+                // Create transaction for cleanup on failure
+                let output_buf = output_path.as_ref().ok_or(anyhow!("Output path required"))?;
+                let mut transaction = CreateTransaction::new(output_buf.clone());
+
                 // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
                 let full_cmd = format!("set -o pipefail; {}", cmd);
                 
@@ -706,59 +748,64 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         return Err(anyhow!("Archive repack failed: {}", stderr));
                     }
                 } else {
-                    // Progress mode: show spinner with file info
-                    let pb = ProgressBar::new_spinner();
+                    // Progress mode: show filling progress bar
+                    let pb = ProgressBar::new(input_size);
                     pb.set_style(
                         ProgressStyle::with_template(
-                            "{spinner:.cyan} [{elapsed_precise}] {msg}"
+                            "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
                         )
                         .unwrap()
-                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+                        .progress_chars("█▓▒░  ")
                     );
-                    pb.set_message(format!(
-                        "Repacking {:.1} MB archive → SquashFS...",
-                        input_size_mb
-                    ));
-                    pb.enable_steady_tick(Duration::from_millis(80));
+                    pb.set_message("Repacking archive → SquashFS");
+                    pb.enable_steady_tick(Duration::from_millis(100));
 
                     let output = executor.run("sh", &["-c", &full_cmd])?;
                     
                     if output.status.success() {
                         pb.finish_with_message(format!(
-                            "✓ Repacked {:.1} MB archive successfully",
+                            "✓ Repacked {:.1} MB successfully",
                             input_size_mb
                         ));
                     } else {
-                        pb.finish_with_message("✗ Archive repack failed");
+                        pb.finish_with_message("✗ Failed");
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         return Err(anyhow!("Archive repack failed: {}", stderr));
                     }
                 }
                 
+                transaction.set_success();
                 return Ok(());
             }
 
             // 3. Standard Directory Packing (Directory -> SquashFS)
             let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
-            let output_str = output_path
+            let output_buf = output_path
                 .as_ref()
-                .ok_or(anyhow!("Output path required"))?
+                .ok_or(anyhow!("Output path required"))?;
+            let output_str = output_buf
                 .to_str()
                 .ok_or(anyhow!("Invalid output path"))?;
 
+            // Create transaction for cleanup on failure
+            let mut transaction = CreateTransaction::new(output_buf.clone());
+
             let mut cmd_args = vec![input_str, output_str];
 
-            // Progress control: use -info for verbose progress or -no-progress to hide
+            // Progress control
             if no_progress {
                 cmd_args.push("-no-progress");
-            } else {
+            } else if vanilla_progress {
+                // Native mksquashfs progress output
                 cmd_args.push("-info");
+            } else {
+                // Custom progress bar - disable mksquashfs output
+                cmd_args.push("-no-progress");
             }
 
             let comp_level_str = compression.to_string();
             comp_mode.apply_to_mksquashfs(&mut cmd_args, &comp_level_str);
 
-            // When progress is enabled, use run_interactive to show mksquashfs output in real-time
             if no_progress {
                 // Silent mode: capture output
                 let output = executor.run("mksquashfs", &cmd_args)?;
@@ -766,15 +813,51 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     return Err(anyhow!("mksquashfs failed: {}", stderr));
                 }
-            } else {
-                // Interactive mode: show progress in real-time
+            } else if vanilla_progress {
+                // Vanilla mode: show native mksquashfs progress in real-time
                 let status = executor.run_interactive("mksquashfs", &cmd_args)
                     .context("Failed to execute mksquashfs")?;
                 if !status.success() {
                     return Err(anyhow!("mksquashfs failed"));
                 }
+            } else {
+                // Custom progress bar mode
+                // Get directory size for progress estimation
+                let dir_size = if let Ok(output) = executor.run("du", &["-sb", input_str]) {
+                    if output.status.success() {
+                        let out_str = String::from_utf8_lossy(&output.stdout);
+                        out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
+                    } else { 0 }
+                } else { 0 };
+                
+                let dir_size_mb = dir_size as f64 / 1024.0 / 1024.0;
+                
+                let pb = ProgressBar::new(dir_size);
+                pb.set_style(
+                    ProgressStyle::with_template(
+                        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
+                    )
+                    .unwrap()
+                    .progress_chars("█▓▒░  ")
+                );
+                pb.set_message("Packing directory → SquashFS");
+                pb.enable_steady_tick(Duration::from_millis(100));
+                
+                let output = executor.run("mksquashfs", &cmd_args)?;
+                
+                if output.status.success() {
+                    pb.finish_with_message(format!(
+                        "✓ Packed {:.1} MB successfully",
+                        dir_size_mb
+                    ));
+                } else {
+                    pb.finish_with_message("✗ Failed");
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(anyhow!("mksquashfs failed: {}", stderr));
+                }
             }
 
+            transaction.set_success();
             Ok(())
         }
         Commands::Mount { image, mount_point } => {
@@ -1123,6 +1206,7 @@ mod tests {
                 encrypt: false,
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
+                vanilla_progress: false,
             },
         };
 
@@ -1242,6 +1326,7 @@ mod tests {
                 encrypt: true,
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: false,
+                vanilla_progress: false,
             },
         };
 
@@ -1375,6 +1460,7 @@ mod tests {
                 encrypt: false,
                 compression: 0,
                 no_progress: true,
+                vanilla_progress: false,
             },
         };
 
