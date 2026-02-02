@@ -4,10 +4,43 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::process;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
+
+/// Global path for cleanup on interrupt (SIGINT/SIGTERM)
+/// Used by ctrlc handler to remove incomplete output files
+static CLEANUP_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+
+fn get_cleanup_path() -> &'static Mutex<Option<PathBuf>> {
+    CLEANUP_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn register_cleanup_path(path: PathBuf) {
+    if let Ok(mut guard) = get_cleanup_path().lock() {
+        *guard = Some(path);
+    }
+}
+
+fn clear_cleanup_path() {
+    if let Ok(mut guard) = get_cleanup_path().lock() {
+        *guard = None;
+    }
+}
+
+fn cleanup_on_interrupt() {
+    if let Ok(guard) = get_cleanup_path().lock() {
+        if let Some(path) = guard.as_ref() {
+            if path.exists() {
+                eprintln!("\nInterrupted! Cleaning up: {:?}", path);
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -203,6 +236,8 @@ struct CreateTransaction {
 
 impl CreateTransaction {
     fn new(output_path: PathBuf) -> Self {
+        // Register for cleanup on Ctrl+C
+        register_cleanup_path(output_path.clone());
         Self {
             output_path,
             success: false,
@@ -216,6 +251,9 @@ impl CreateTransaction {
 
 impl Drop for CreateTransaction {
     fn drop(&mut self) {
+        // Clear the global cleanup path first
+        clear_cleanup_path();
+        
         if !self.success {
             // Remove the incomplete file if we failed
             if self.output_path.exists() {
@@ -260,6 +298,12 @@ fn main() -> Result<()> {
         // Safe way to set default log level if not present
     }
     env_logger::init();
+
+    // Set up Ctrl+C handler for cleanup
+    ctrlc::set_handler(|| {
+        cleanup_on_interrupt();
+        process::exit(130); // 128 + SIGINT(2) = standard exit code for Ctrl+C
+    }).expect("Error setting Ctrl+C handler");
 
     let args_raw: Vec<String> = std::env::args().collect();
 

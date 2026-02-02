@@ -153,3 +153,31 @@ teardown() {
 #     # We expect some failure message about archive repacking failed
 #     [[ "$output" == *"Archive repack failed"* ]]
 # }
+
+@test "Cleanup: Interrupted archive repack removes incomplete file" {
+    # Create random data file and tar it (slow to repack, unlike sparse files)
+    dd if=/dev/urandom of="$TEST_DIR/random.bin" bs=1M count=50 2>/dev/null
+    tar -cf "$TEST_DIR/big.tar" -C "$TEST_DIR" random.bin
+    
+    OUTPUT="$TEST_DIR/interrupted.sqfs"
+    
+    # Start create in background
+    $ZKS_SQM_BIN create "$TEST_DIR/big.tar" "$OUTPUT" --no-progress &
+    CREATE_PID=$!
+    
+    # Wait for output file to appear (max 10 sec)
+    for i in {1..100}; do
+        [ -f "$OUTPUT" ] && break
+        sleep 0.1
+    done
+    
+    # Ensure file was created before we interrupt
+    [ -f "$OUTPUT" ] || skip "Output file never appeared (system too slow?)"
+    
+    # Interrupt the process
+    kill -INT $CREATE_PID 2>/dev/null || true
+    wait $CREATE_PID 2>/dev/null || true
+    
+    # Assert: file should NOT exist after cleanup
+    [ ! -f "$OUTPUT" ]
+}

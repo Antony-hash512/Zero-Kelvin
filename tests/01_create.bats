@@ -108,3 +108,32 @@ teardown() {
     # Обычно при отсутствии сжатия unsquashfs пишет "gzip" (как дефолт метаданных)
     # или "no compression". Главное — проверка размера выше.
 }
+
+@test "Cleanup: Interrupted create removes incomplete file (Directory)" {
+    # Create random data file (slow to compress, unlike sparse files)
+    BIGDIR="$TEST_DIR/bigdir"
+    mkdir -p "$BIGDIR"
+    dd if=/dev/urandom of="$BIGDIR/random.bin" bs=1M count=50 2>/dev/null
+    
+    OUTPUT="$TEST_DIR/interrupted.sqfs"
+    
+    # Start create in background
+    $ZKS_SQM_BIN create "$BIGDIR" "$OUTPUT" --no-progress &
+    CREATE_PID=$!
+    
+    # Wait for file to appear (max 10 sec)
+    for i in {1..100}; do
+        [ -f "$OUTPUT" ] && break
+        sleep 0.1
+    done
+    
+    # Ensure file was created before we interrupt
+    [ -f "$OUTPUT" ] || skip "Output file never appeared (system too slow?)"
+    
+    # Interrupt the process
+    kill -INT $CREATE_PID 2>/dev/null || true
+    wait $CREATE_PID 2>/dev/null || true
+    
+    # Assert: file should NOT exist after cleanup
+    [ ! -f "$OUTPUT" ]
+}
