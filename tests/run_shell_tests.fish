@@ -1,10 +1,10 @@
 #!/usr/bin/env fish
 
 # --- ШАГ 0: Парсинг аргументов ---
-argparse 'build' 'no-build' 'build-release' 'no-root' -- $argv
+argparse 'build' 'no-build' 'build-release' 'no-build-release' 'no-root' -- $argv
 or exit 1
 
-if set -q _flag_build_release
+if set -q _flag_build_release; or set -q _flag_no_build_release
     set TEST_TARGET "release"
 else
     set TEST_TARGET "debug"
@@ -17,7 +17,7 @@ end
 set -x SKIP_ROOT "1"
 set -x ROOT_CMD ""
 
-if set -q _flag_build_release
+if set -q _flag_build_release; or set -q _flag_no_build_release
     echo "Release mode: Root tests disabled for safety."
 else if set -q _flag_no_root
     echo "Flag --no-root detected: Root tests DISABLED."
@@ -59,7 +59,7 @@ if set -q _flag_build_release
     set build_choice "y"
 else if set -q _flag_build
     set build_choice "y"
-else if set -q _flag_no_build
+else if set -q _flag_no_build; or set -q _flag_no_build_release
     set build_choice "n"
 else
     read -P "Do you want to build/rebuild the project? (y/N) " -l build_choice
