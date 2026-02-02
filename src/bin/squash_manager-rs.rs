@@ -1101,7 +1101,23 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                                      // squashfuse [options] IMAGE MOUNTPOINT
                                      
                                      for (i, arg) in args.iter().enumerate() {
-                                         if *arg == abs_path_str {
+                                         // Skip empty args and options
+                                         if arg.is_empty() || arg.starts_with('-') {
+                                             continue;
+                                         }
+                                         
+                                         // Try to canonicalize the argument to handle:
+                                         // 1. Relative paths (./image.sqfs vs /full/path/image.sqfs)
+                                         // 2. Symlinks (/home/user vs /home/share/user)
+                                         let arg_path = PathBuf::from(arg);
+                                         let matches = if let Ok(arg_canonical) = fs::canonicalize(&arg_path) {
+                                             arg_canonical == abs_path
+                                         } else {
+                                             // If canonicalize fails, fall back to string comparison
+                                             *arg == abs_path_str
+                                         };
+                                         
+                                         if matches {
                                              if i + 1 < args.len() {
                                                  let potential_mount = args[i+1];
                                                  if !potential_mount.starts_with('-') && !potential_mount.is_empty() {
