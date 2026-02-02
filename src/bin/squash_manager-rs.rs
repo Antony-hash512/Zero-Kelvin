@@ -293,6 +293,136 @@ fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -
     10
 }
 
+/// Get uncompressed size of an archive file.
+/// Uses format-specific tools to determine the actual uncompressed size.
+/// Falls back to compressed_size * safety_multiplier if detection fails.
+fn get_archive_uncompressed_size(path: &PathBuf, executor: &impl CommandExecutor) -> u64 {
+    let file_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    
+    let path_str = path.to_str().unwrap_or("");
+    let compressed_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    
+    // Safety multiplier for fallback (archives can be 10-20x smaller than uncompressed)
+    let fallback_size = compressed_size.saturating_mul(10);
+    
+    // Try to get exact uncompressed size based on format
+    let uncompressed = if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
+        // gzip -l shows: compressed, uncompressed, ratio, name
+        // Note: gzip -l may report incorrect size for files > 4GB (32-bit limitation)
+        if let Ok(output) = executor.run("gzip", &["-l", path_str]) {
+            if output.status.success() {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                // Parse second line, second column (uncompressed)
+                if let Some(line) = out_str.lines().nth(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(size) = parts[1].parse::<u64>() {
+                            // gzip -l has 32-bit overflow for files > 4GB
+                            // If reported uncompressed < compressed, use fallback
+                            if size > compressed_size {
+                                return size;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fallback_size
+    } else if file_name.ends_with(".tar.zst") || file_name.ends_with(".tzst") {
+        // zstd --list shows decompressed size
+        if let Ok(output) = executor.run("zstd", &["--list", path_str]) {
+            if output.status.success() {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                // Look for "Decompressed Size:" line
+                for line in out_str.lines() {
+                    if line.contains("Decompressed Size:") {
+                        // Parse size with suffix (KB, MB, GB)
+                        let parts: Vec<&str> = line.split(':').collect();
+                        if parts.len() >= 2 {
+                            let size_part = parts[1].trim();
+                            if let Some(bytes) = parse_size_with_suffix(size_part) {
+                                return bytes;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fallback_size
+    } else if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
+        // xz -l shows uncompressed size
+        if let Ok(output) = executor.run("xz", &["-l", path_str]) {
+            if output.status.success() {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                // Parse "Uncompressed" column (second data line)
+                for line in out_str.lines() {
+                    if line.contains("MiB") || line.contains("GiB") || line.contains("KiB") {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        // Format: Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename
+                        if parts.len() >= 5 {
+                            // Uncompressed is column 4 (index 3) with suffix in column 5 (index 4)
+                            let size_str = format!("{} {}", parts[3], parts[4]);
+                            if let Some(bytes) = parse_size_with_suffix(&size_str) {
+                                return bytes;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        fallback_size
+    } else if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") {
+        // bzip2 doesn't store uncompressed size, use fallback
+        fallback_size
+    } else if file_name.ends_with(".tar") {
+        // Plain tar - actual size is the file size
+        compressed_size
+    } else {
+        // Other formats (zip, 7z, rar) - use fallback
+        fallback_size
+    };
+    
+    if std::env::var("RUST_LOG").is_ok() {
+        eprintln!("DEBUG: Archive uncompressed size estimate: {} bytes (compressed: {} bytes)", 
+            uncompressed, compressed_size);
+    }
+    
+    uncompressed
+}
+
+/// Parse size string with suffix (KB, MB, GB, KiB, MiB, GiB)
+fn parse_size_with_suffix(s: &str) -> Option<u64> {
+    let s = s.trim();
+    
+    // Try to find number and suffix
+    let mut num_str = String::new();
+    let mut suffix = String::new();
+    
+    for c in s.chars() {
+        if c.is_ascii_digit() || c == '.' || c == ',' {
+            num_str.push(if c == ',' { '.' } else { c });
+        } else if c.is_alphabetic() {
+            suffix.push(c);
+        }
+    }
+    
+    let num: f64 = num_str.parse().ok()?;
+    
+    let multiplier = match suffix.to_uppercase().as_str() {
+        "B" | "" => 1.0,
+        "K" | "KB" | "KIB" => 1024.0,
+        "M" | "MB" | "MIB" => 1024.0 * 1024.0,
+        "G" | "GB" | "GIB" => 1024.0 * 1024.0 * 1024.0,
+        "T" | "TB" | "TIB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    
+    Some((num * multiplier) as u64)
+}
+
 fn main() -> Result<()> {
     if std::env::var("RUST_LOG").is_err() {
         // Safe way to set default log level if not present
@@ -435,6 +565,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
             if encrypt {
                 // Determine raw size
+                // For directories: use du -sb
+                // For archives: use uncompressed size (not compressed file size!)
                 let raw_size_bytes = if input_path.is_dir() {
                     // du -sb
                      if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
@@ -446,8 +578,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         }
                      } else { 0 }
                 } else {
-                    // file size
-                    fs::metadata(&input_path).map(|m| m.len()).unwrap_or(0)
+                    // For archives, get uncompressed size (not just file size!)
+                    get_archive_uncompressed_size(&input_path, executor)
                 };
 
                 if raw_size_bytes == 0 {
