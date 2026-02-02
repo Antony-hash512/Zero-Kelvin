@@ -41,7 +41,7 @@ prepare() {
     ls -F "$srcdir/$pkgname/"
 }
 
-
+options=(!debug)
 
 
 build() {
