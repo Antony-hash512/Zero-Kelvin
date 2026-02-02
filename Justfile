@@ -4,30 +4,6 @@
 default:
     @just --list --unsorted
 
-# Запуск всех юнит-тестов
-unit-tests:
-    cargo test --locked
-
-# Запуск всех интеграционных шелл-тестов
-shell-tests:
-    fish tests/run_shell_tests.fish --no-build
-
-# Запуск всех интеграционных шелл-тестов без root
-shell-tests-noroot:
-    fish tests/run_shell_tests.fish --no-build --no-root
-
-# (Ре)билд + Запуск всех интеграционных шелл-тестов
-build-and-shell-tests:
-    fish tests/run_shell_tests.fish --build
-
-# (Ре)билд + Запуск всех интеграционных шелл-тестов без root
-build-and-shell-tests-noroot:
-    fish tests/run_shell_tests.fish --build --no-root
-
-# (Ре)билд в режиме релиза + Запуск всех интеграционных шелл-тестов
-build-and-shell-tests-release:
-    fish tests/run_shell_tests.fish --build-release --no-root
-
 # Запуск вообще всех тестов
 test-all:
     just unit-tests
@@ -61,3 +37,31 @@ pkg-install:
 # Очистка артефактов сборки пакета
 pkg-clean:
     cd local_pkg && rm -rf pkg src *.pkg.tar.zst
+
+
+
+
+# Запуск всех юнит-тестов
+unit-tests:
+    cargo test --locked
+
+# Запуск всех интеграционных шелл-тестов
+shell-tests:
+    fish tests/run_shell_tests.fish --no-build
+
+# Запуск всех интеграционных шелл-тестов без root
+shell-tests-noroot:
+    fish tests/run_shell_tests.fish --no-build --no-root
+
+# (Ре)билд + Запуск всех интеграционных шелл-тестов
+build-and-shell-tests:
+    fish tests/run_shell_tests.fish --build
+
+# (Ре)билд + Запуск всех интеграционных шелл-тестов без root
+build-and-shell-tests-noroot:
+    fish tests/run_shell_tests.fish --build --no-root
+
+# (Ре)билд в режиме релиза + Запуск всех интеграционных шелл-тестов
+build-and-shell-tests-release:
+    fish tests/run_shell_tests.fish --build-release --no-root
+
