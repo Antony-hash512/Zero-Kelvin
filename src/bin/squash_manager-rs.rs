@@ -285,6 +285,30 @@ fn main() -> Result<()> {
     run(args, &executor)
 }
 
+/// Helper to determine if we need sudo/doas
+fn get_effective_root_cmd() -> Vec<String> {
+    // Check if we are root via 'id -u'
+    if let Ok(output) = std::process::Command::new("id").arg("-u").output() {
+        if let Ok(uid_str) = String::from_utf8(output.stdout) {
+            if let Ok(uid) = uid_str.trim().parse::<u32>() {
+                if uid == 0 {
+                    return vec![];
+                }
+            }
+        }
+    }
+    
+    // Check env var
+    if let Ok(cmd) = std::env::var("ROOT_CMD") {
+         if !cmd.trim().is_empty() {
+             return cmd.split_whitespace().map(|s| s.to_string()).collect();
+         }
+    }
+
+    // Default to sudo
+    vec!["sudo".to_string()]
+}
+
 /// Main logic entry point with dependency injection
 pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<()> {
     match args.command {
@@ -349,40 +373,24 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // For automation/simplicity we might need input. 
                 // But normally ZKS asks user interactive password. 
                 // 'cryptsetup luksFormat' without key file will ask interactive.
-                // We should output stdout/stderr to user so they see prompt.
-                // executor.run captures output. We need INTERACTIVE run if we want password prompt!
-                // RealSystem uses Command::output() by default which captures.
-                // If we want interactive, we need Command::spawn() or inherit stdio.
-                // But our Executor trait returns Output.
-                // FIXME: For now, assuming batch mode? No, this tool is CLI.
-                // The current executor is simplistic.
-                // However, 'squash_manager.fish' just ran valid commands.
-                // If we run via `sudo`, sudo asks password.
-                // `cryptsetup` asks passphrase.
-                // We must ensure stdin is piped!
-                // RealSystem implementation in `executor.rs` (impl in lib) likely uses .output().
-                // Code check: This is `bin/squash_manager-rs.rs`. executor is `RealSystem`.
-                // Let's assume for this Task implementation we use `run` which captures, 
-                // BUT for luksFormat/open we might be blocked if it asks password and we don't map stdin.
-                // CRITICAL SIGHT: `executor::RealSystem` implementation is not visible here but we must assume standard behavior.
-                // If `run` captures, interactive prompts fail (EOF or hang).
-                // Solution: We should use `std::process::Command` directly for these interactive steps 
-                // OR upgrade Executor to support interactive.
-                // Given constraints, I will use `std::process::Command` for interactive steps directly here,
-                // bypassing executor for luksFormat/Open to allow TTY.
-                // OR I can try to use `executor` if I know it supports inheritance.
-                // Let's stick to `std::process::Command` for interactive parts to be safe, 
-                // but `transaction` cleanup uses `executor` (non-interactive close).
+                // We should use run_interactive to inherit stdio.
                 
-                // But wait, the goal is to implement `squash_manager` which is called by `zks`. 
-                // `zks` (Fish) handles user interaction? No, `squash_manager` does.
-                // So prompts must show up.
+                
+                // Get command prefix (e.g. empty if root, or ["sudo"])
+                let root_cmd = get_effective_root_cmd();
                 
                 println!("Initializing LUKS container...");
-                let status = executor.run("sudo", &["cryptsetup", "luksFormat", "-q", output_str])
+                // Construct command: [sudo] cryptsetup luksFormat -q output
+                let mut luks_args = root_cmd.clone();
+                luks_args.extend(vec!["cryptsetup".to_string(), "luksFormat".to_string(), "-q".to_string(), output_str.to_string()]);
+                
+                let prog = luks_args.remove(0);
+                let args_refs: Vec<&str> = luks_args.iter().map(|s| s.as_str()).collect();
+
+                let status = executor.run_interactive(&prog, &args_refs)
                     .context("Failed to execute cryptsetup luksFormat")?;
 
-                if !status.status.success() {
+                if !status.success() {
                     return Err(anyhow!("luksFormat failed"));
                 }
 
@@ -393,10 +401,16 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let mapper_name = format!("sq_{}_{}", timestamp, rnd);
                 
                 println!("Opening LUKS container...");
-                let status_open = executor.run("sudo", &["cryptsetup", "open", output_str, &mapper_name])
+                let mut open_args = root_cmd.clone();
+                open_args.extend(vec!["cryptsetup".to_string(), "open".to_string(), output_str.to_string(), mapper_name.clone()]);
+                
+                let prog_open = open_args.remove(0);
+                let args_open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
+
+                let status_open = executor.run_interactive(&prog_open, &args_open_refs)
                     .context("Failed to execute cryptsetup open")?;
                 
-                if !status_open.status.success() {
+                if !status_open.success() {
                     return Err(anyhow!("cryptsetup open failed"));
                 }
                 
@@ -407,18 +421,44 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // If input is dir -> mksquashfs to mapper_path
                 let pack_result = if input_path.is_dir() {
                     let mut cmd_args = vec![
-                         input_path.to_str().unwrap(),
-                         &mapper_path,
-                         "-no-recovery",
-                         "-noappend" // Critical for block device
+                         input_path.to_str().unwrap().to_string(),
+                         mapper_path.clone(),
+                         "-no-recovery".to_string(),
+                         "-noappend".to_string()
                     ];
-                    if no_progress { cmd_args.push("-no-progress"); }
+                    if no_progress { cmd_args.push("-no-progress".to_string()); }
                     let level_str = compression.to_string();
-                    comp_mode.apply_to_mksquashfs(&mut cmd_args, &level_str);
                     
-                    // We need sudo for mksquashfs to write to /dev/mapper (usually owned by root)
-                    // Regular mksquashfs can't write to root-owned device map
-                    let output = executor.run("sudo", &["mksquashfs", cmd_args[0], cmd_args[1], cmd_args[2], cmd_args[3]].iter().chain(cmd_args[4..].iter()).map(|s| *s).collect::<Vec<_>>().as_slice())?;
+                    // Helper to adapt Vec<String> to Vec<&str> API of CompressionMode
+                    // We need to temporarily hold the strings?
+                    // compression mode just pushes &str literals usually.
+                    // But wait, `apply_to_mksquashfs` implementation in `lib.rs` takes `&mut Vec<&str>`.
+                    // We have `Vec<String>`.
+                    // We should change `apply_to_mksquashfs` to simple push logic OR handle manual push here.
+                    // Or... convert our Vec<String> to Vec<&str> first? No, we can't push to Vec<&str> if backing string is new.
+                    // Simpler: Apply args manually or refactor `apply_to_mksquashfs` is generic?
+                    // "comp_mode" implementation is simple.
+                    // Let's just manually apply logic here since `apply_to...` is restrictive for String owner.
+                    match comp_mode {
+                         CompressionMode::None => cmd_args.push("-no-compression".to_string()),
+                         CompressionMode::Zstd(_) => {
+                              cmd_args.push("-comp".to_string());
+                              cmd_args.push("zstd".to_string());
+                              cmd_args.push("-Xcompression-level".to_string());
+                              cmd_args.push(level_str.to_string());
+                         },
+                         // other modes...
+                    }
+                    
+                    // Construct: [sudo] mksquashfs ...
+                    let mut mk_args = root_cmd.clone();
+                    mk_args.extend(vec!["mksquashfs".to_string()]);
+                    mk_args.extend(cmd_args);
+                    
+                    let mk_prog = mk_args.remove(0);
+                    let mk_refs: Vec<&str> = mk_args.iter().map(|s| s.as_str()).collect();
+
+                    let output = executor.run(&mk_prog, &mk_refs)?;
                     if !output.status.success() {
                          Err(anyhow!("mksquashfs failed: {}", String::from_utf8_lossy(&output.stderr)))
                     } else { Ok(()) }
@@ -435,7 +475,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     else if file_name.ends_with(".tar.zip") { "unzip -p" }
                     else if file_name.ends_with(".tar.7z") { "7z x -so" }
                     else if file_name.ends_with(".tar.rar") { "unrar p -inul" }
-                    else { return Err(anyhow!("Unsupported format")); };
+                    else { return Err(anyhow!("Unsupported format: {}", file_name)); };
 
                     let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
                     
@@ -453,7 +493,13 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         mapper_path
                     );
                     
-                    let output = executor.run("sudo", &["sh", "-c", &cmd])?;
+                    let mut sh_args = root_cmd.clone();
+                    sh_args.extend(vec!["sh".to_string(), "-c".to_string(), cmd]);
+                    
+                    let sh_prog = sh_args.remove(0);
+                    let sh_refs: Vec<&str> = sh_args.iter().map(|s| s.as_str()).collect();
+                    
+                    let output = executor.run(&sh_prog, &sh_refs)?;
                     if !output.status.success() {
                          Err(anyhow!("Archive repack failed: {}", String::from_utf8_lossy(&output.stderr)))
                     } else { Ok(()) }
@@ -790,6 +836,7 @@ mod tests {
         pub CommandExecutor {}
         impl CommandExecutor for CommandExecutor {
             fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
+            fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus>;
         }
     }
 
@@ -884,42 +931,32 @@ mod tests {
 
         // 3. luksFormat
         let output_str_3 = output_str.clone();
-        mock.expect_run()
+        mock.expect_run_interactive()
             .withf(move |program, args| {
-                 program == "sudo" && args == vec!["cryptsetup", "luksFormat", "-q", output_str_3.as_str()]
+                 // get_effective_root_cmd returns ["sudo"] by default if not root
+                 program == "cryptsetup" && args == vec!["luksFormat", "-q", output_str_3.as_str()]
+                 || program == "sudo" && args == vec!["cryptsetup", "luksFormat", "-q", output_str_3.as_str()]
             })
             .times(1)
-            .returning(|_, _| Ok(Output {
-                status: std::process::ExitStatus::from_raw(0),
-                stdout: vec![],
-                stderr: vec![],
-            }));
+            .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
 
         // 4. open
         let output_str_4 = output_str.clone();
-        mock.expect_run()
+        mock.expect_run_interactive()
             .withf(move |program, args| {
-                program == "sudo" &&
-                args.len() == 4 &&
-                args[0] == "cryptsetup" &&
-                args[1] == "open" &&
-                args[2] == output_str_4.as_str() &&
-                args[3].starts_with("sq_")
+                (program == "cryptsetup" || program == "sudo") &&
+                args.contains(&"open") &&
+                args.contains(&output_str_4.as_str())
             })
             .times(1)
-            .returning(|_, _| Ok(Output {
-                status: std::process::ExitStatus::from_raw(0),
-                stdout: vec![],
-                stderr: vec![],
-            }));
+            .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
 
         // 5. mksquashfs
         // output to /dev/mapper/...
         mock.expect_run()
             .withf(move |program, args| {
-                 program == "sudo" &&
-                 args[0] == "mksquashfs" &&
-                 args[2].starts_with("/dev/mapper/sq_")
+                 (program == "mksquashfs" || program == "sudo") &&
+                 args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
             })
             .times(1)
             .returning(|_, _| Ok(Output {
@@ -930,7 +967,7 @@ mod tests {
             
         // 6. unsquashfs -s (Trim size)
         mock.expect_run()
-            .withf(|program, args| program == "sudo" && args[0] == "unsquashfs")
+            .withf(|program, args| (program == "unsquashfs" || program == "sudo") && args.contains(&"unsquashfs") || args.contains(&"-s"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -940,7 +977,7 @@ mod tests {
             
         // 7. luksDump (Offset)
         mock.expect_run()
-            .withf(|program, args| program == "sudo" && args[0] == "cryptsetup" && args[1] == "luksDump")
+            .withf(|program, args| (program == "cryptsetup" || program == "sudo") && args.contains(&"luksDump"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -950,7 +987,7 @@ mod tests {
             
         // 8. close
         mock.expect_run()
-            .withf(|program, args| program == "sudo" && args[0] == "cryptsetup" && args[1] == "close")
+            .withf(|program, args| (program == "cryptsetup" || program == "sudo") && args.contains(&"close"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),

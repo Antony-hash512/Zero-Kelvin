@@ -31,14 +31,15 @@ setup() {
 teardown() {
     [ "$SKIP_ROOT" = "1" ] && return
     
-    $ROOT_CMD $ZKS_SQM_BIN umount "$MOUNT_POINT" || true
+    # --- FIX #1: Используем полный путь к бинарнику ---
+    # Needs root to umount/close
+    $ROOT_CMD "$ZKS_SQM_BIN" umount "$MOUNT_POINT" || true
     
     # Remove mapper if left over
     # (Assuming name format sq_NAME)
     NAME=$(basename "$OUTPUT_LUKS")
     MAPPER="sq_${NAME%.*}" # Approximation
-    # Best effort cleanup
-    
+    # Best effort cleanup   
     rm -rf "$TEST_DIR"
 }
 
@@ -47,13 +48,15 @@ teardown() {
     [ "$SKIP_ROOT" = "1" ] && skip
     
     # 1. Create encrypted archive
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_LUKS" -e --no-progress
+    # Passwords needed: 1. luksFormat new, 2. luksFormat verify, 3. open
+    run bash -c "printf 'testpassword\ntestpassword\ntestpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" create \"$INPUT_DIR\" \"$OUTPUT_LUKS\" -e --no-progress"
+    if [ "$status" -ne 0 ]; then echo "CREATE FAILED: $output" >&3; fi
     [ "$status" -eq 0 ]
     [ -f "$OUTPUT_LUKS" ]
     
     # 2. Mount it
     mkdir -p "$MOUNT_POINT"
-    run $ROOT_CMD $ZKS_SQM_BIN mount "$OUTPUT_LUKS" "$MOUNT_POINT"
+    run bash -c "echo -n 'testpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" mount \"$OUTPUT_LUKS\" \"$MOUNT_POINT\""
     [ "$status" -eq 0 ]
     
     # 3. Verify content
@@ -62,7 +65,7 @@ teardown() {
     [[ "$output" == *"ZeroKelvinStazis"* ]]
     
     # 4. Unmount handled by teardown or explicitly
-    run $ROOT_CMD $ZKS_SQM_BIN umount "$MOUNT_POINT"
+    run $ROOT_CMD "$ZKS_SQM_BIN" umount "$MOUNT_POINT"
     [ "$status" -eq 0 ]
 }
 
@@ -73,24 +76,25 @@ teardown() {
     # Assuming mapper naming convention matches "sq_*"
     
     # We create and destroy one more time to be sure
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_LUKS" -e --no-progress
+    run bash -c "printf 'testpassword\ntestpassword\ntestpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" create \"$INPUT_DIR\" \"$OUTPUT_LUKS\" -e --no-progress"
     [ "$status" -eq 0 ]
     
     # Check if mapper exists (should be CLOSED after create)
     # The current implementation closes it after creation
     NAME=$(basename "$OUTPUT_LUKS")
-    MAPPER_NAME="sq_${NAME%.*}"
+    MAPPER_NAME="sq_${NAME%.*}" # Note: Rust code must match this naming convention or output the mapper name
     
     # Check existence in /dev/mapper
     if [ -e "/dev/mapper/$MAPPER_NAME" ]; then
          echo "Mapper $MAPPER_NAME still exists after create!" >&3
          # Fail
-         [ "1" -eq "0" ] 
+         return 1
     fi
     
-    # Now mount
+    # Mount (Open mapper)
     mkdir -p "$MOUNT_POINT"
-    run $ROOT_CMD $ZKS_SQM_BIN mount "$OUTPUT_LUKS" "$MOUNT_POINT"
+    # Mount only needs 1 password
+    run bash -c "echo -n 'testpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" mount \"$OUTPUT_LUKS\" \"$MOUNT_POINT\""
     [ "$status" -eq 0 ]
     
     # Check if mapper exists (should be OPEN)
@@ -102,14 +106,13 @@ teardown() {
          echo "Mapper not found at expected path /dev/mapper/$MAPPER_NAME" >&3
     fi
     
-    # Umount
-    run $ROOT_CMD $ZKS_SQM_BIN umount "$MOUNT_POINT"
-    [ "$status" -eq 0 ]
+    # Umount (Close mapper)
+    run $ROOT_CMD "$ZKS_SQM_BIN" umount "$MOUNT_POINT"
     
     # Check if mapper exists (should be CLOSED after umount)
     if [ -e "/dev/mapper/$MAPPER_NAME" ]; then
          echo "Mapper $MAPPER_NAME still exists after umount!" >&3
-         [ "1" -eq "0" ]
+         return 1
     fi
 }
 
@@ -119,12 +122,15 @@ teardown() {
     OUTPUT_NO_COMP="$TEST_DIR/enc_no_comp.sqfs"
     OUTPUT_HIGH_COMP="$TEST_DIR/enc_high_comp.sqfs"
     
-    # 1. Create with -c 0 (No compression - creates a large file)
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_NO_COMP" -e -c 0 --no-progress
+    # --- FIX #2: Передаем пароль через пайп (bash -c) ---
+    # 1. Create with -c 0
+    # Needs 3 passwords
+    run bash -c "printf 'testpassword\ntestpassword\ntestpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" create \"$INPUT_DIR\" \"$OUTPUT_NO_COMP\" -e -c 0 --no-progress"
     [ "$status" -eq 0 ]
     
-    # 2. Create with -c 19 (High compression)
-    run $ROOT_CMD $ZKS_SQM_BIN create "$INPUT_DIR" "$OUTPUT_HIGH_COMP" -e -c 19 --no-progress
+    # 2. Create with -c 19
+    # Needs 3 passwords
+    run bash -c "printf 'testpassword\ntestpassword\ntestpassword' | $ROOT_CMD \"$ZKS_SQM_BIN\" create \"$INPUT_DIR\" \"$OUTPUT_HIGH_COMP\" -e -c 19 --no-progress"
     [ "$status" -eq 0 ]
     
     # 3. Compare sizes

@@ -6,6 +6,9 @@ use std::process::{Command, Output, Stdio};
 pub trait CommandExecutor {
     /// Runs a command synchronously and captures output.
     fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
+
+    /// Runs a command interactively (inherits stdio).
+    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus>;
 }
 
 /// Real system executor using std::process::Command.
@@ -18,6 +21,13 @@ impl CommandExecutor for RealSystem {
             .stdin(Stdio::null())
             .output()
             .with_context(|| format!("Failed to execute command: {} {:?}", program, args))
+    }
+
+    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus> {
+        Command::new(program)
+            .args(args)
+            .status()
+            .with_context(|| format!("Failed to execute interactive command: {} {:?}", program, args))
     }
 }
 
