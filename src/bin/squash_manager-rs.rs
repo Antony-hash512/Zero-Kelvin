@@ -120,17 +120,21 @@ pub struct SquashManagerArgs {
     pub command: Commands,
 }
 
-impl SquashManagerArgs {
-    pub fn build_command() -> clap::Command {
-        use clap::CommandFactory;
-        let cmd = Self::command();
-        cmd.after_help(format!("Detailed Command Information:
+const BANNER: &str = r#"
  ____                        _       __  __                                   
 / ___|  __ _ _   _  __ _ ___| |__   |  \/  | __ _ _ __   __ _  __ _  ___ _ __ 
 \___ \ / _` | | | |/ _` / __| '_ \  | |\/| |/ _` | '_ \ / _` |/ _` |/ _ \ '__|
  ___) | (_| | |_| | (_| \__ \ | | | | |  | | (_| | | | | (_| | (_| |  __/ |   
 |____/ \__, |\__,_|\__,_|___/_| |_| |_|  |_|\__,_|_| |_|\__,_|\__, |\___|_|   
           |_|                                                 |___/           
+"#;
+
+impl SquashManagerArgs {
+    pub fn build_command() -> clap::Command {
+        use clap::CommandFactory;
+        let cmd = Self::command();
+        cmd.after_help(format!("Detailed Command Information:
+{0}
   create <INPUT> [OUTPUT] [OPTIONS]
     Convert a directory or an archive into a SquashFS image.
     Arguments:
@@ -138,7 +142,7 @@ impl SquashManagerArgs {
       OUTPUT                (Optional) Path to the resulting image.
     Options:
       -e, --encrypt         Create an encrypted LUKS container (Requires root/sudo).
-      -c, --compression N   Zstd compression level (default: {0}).
+      -c, --compression N   Zstd compression level (default: {1}).
       --no-progress         Disable progress bar completely.
       --vanilla-progress    Use native mksquashfs progress (explicit, also default).
       --alfa-progress       Use experimental custom progress bar (broken, for testing).
@@ -166,7 +170,7 @@ impl SquashManagerArgs {
     Unmounts a directory or all instances of an image.
     Arguments:
       TARGET                Mount point directory OR path to the image file.
-", DEFAULT_ZSTD_COMPRESSION))
+", BANNER, DEFAULT_ZSTD_COMPRESSION))
     }
 }
 

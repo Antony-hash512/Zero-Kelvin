@@ -12,17 +12,20 @@ pub struct ZksArgs {
     pub command: Commands,
 }
 
-impl ZksArgs {
-    pub fn build_command() -> clap::Command {
-        use clap::CommandFactory;
-        let cmd = Self::command();
-        cmd.after_help("Detailed Command Information:
+const BANNER: &str = r#"
  _____                _  __    _       _         ____  _            _     
 |__  /___ _ __ ___   | |/ /___| |_   _(_)_ __   / ___|| |_ __ _ ___(_)___ 
   / // _ \ '__/ _ \  | ' // _ \ \ \ / / | '_ \  \___ \| __/ _` |_  / / __|
  / /|  __/ | | (_) | | . \  __/ |\ V /| | | | |  ___) | || (_| |/ /| \__ \
 /____\___|_|  \___/  |_|\_\___|_| \_/ |_|_| |_| |____/ \__\__,_/___|_|___/
-                                                                          
+"#;
+
+impl ZksArgs {
+    pub fn build_command() -> clap::Command {
+        use clap::CommandFactory;
+        let cmd = Self::command();
+        cmd.after_help(format!("Detailed Command Information:
+{0}
   freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
     Offload data to a SquashFS archive (frozen state).
     Arguments:
@@ -44,7 +47,7 @@ impl ZksArgs {
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
       --force-delete        Delete local files if they match the archive (Destructive!).
-")
+", BANNER))
     }
 }
 
