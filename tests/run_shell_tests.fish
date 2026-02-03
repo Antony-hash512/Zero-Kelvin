@@ -109,3 +109,5 @@ and run_colored_bats tests/03_umount.bats
 and run_colored_bats tests/04_unpack.bats
 
 and run_colored_bats tests/05_luks.bats
+
+and run_colored_bats tests/06_freeze.bats

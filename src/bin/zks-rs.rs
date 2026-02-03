@@ -89,14 +89,19 @@ pub enum Commands {
     },
 }
 
-fn main() {
+use anyhow::{Result, anyhow, Context};
+use zero_kelvin_stazis::engine::{self, FreezeOptions};
+use zero_kelvin_stazis::executor::RealSystem;
+use std::fs;
+
+fn main() -> Result<()> {
     let args_raw: Vec<String> = std::env::args().collect();
 
     // 1. No args -> Help + Exit 0
     if args_raw.len() <= 1 {
          ZksArgs::build_command().print_help().unwrap_or_default();
          println!();
-         return;
+         return Ok(());
     }
 
     let matches = match ZksArgs::build_command().try_get_matches() {
@@ -139,7 +144,68 @@ fn main() {
         })
         .unwrap();
 
-    println!("ZKS started: {:?}", args);
+    match args.command {
+        Commands::Freeze { args, encrypt, read } => {
+            let (targets, output) = resolve_freeze_args(args, read)?;
+            let executor = RealSystem;
+            let options = FreezeOptions { encrypt, output };
+            
+            // Log info
+            // println!("Freezing {:?} to {:?}", targets, options.output);
+            
+            engine::freeze(&targets, &options, &executor)?;
+            println!("Successfully created archive: {:?}", options.output);
+        }
+        Commands::Unfreeze { archive_path } => {
+            println!("Unfreeze not yet implemented. Path: {:?}", archive_path);
+        }
+        Commands::Check { archive_path, use_cmp, force_delete } => {
+            println!("Check not yet implemented. Path: {:?}, cmp: {}, del: {}", archive_path, use_cmp, force_delete);
+        }
+    }
+    
+    Ok(())
+}
+
+fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Result<(Vec<PathBuf>, PathBuf)> {
+    // Logic: 
+    // Last argument is Output Path (Archive).
+    // Preceding arguments are Targets.
+    // If -r file provided, read lines and add to Targets.
+    
+    // 1. Determine Output Path
+    if args.is_empty() {
+        return Err(anyhow!("Destination archive path is required"));
+    }
+    
+    let output_path = args.pop().unwrap(); // Last one
+    
+    // 2. Collect Targets
+    let mut targets = args; // The rest are targets
+    
+    // 3. Read from file if provided
+    if let Some(path) = read_file {
+        let content = fs::read_to_string(&path)
+            .context(format!("Failed to read target list file {:?}", path))?;
+            
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                targets.push(PathBuf::from(trimmed));
+            }
+        }
+    }
+    
+    if targets.is_empty() {
+        return Err(anyhow!("No targets specified to freeze"));
+    }
+    
+    // 4. Handle Output Directory case (Prompting not impl, error for now)
+    if output_path.is_dir() {
+        return Err(anyhow!("Output path '{:?}' is a directory. Please specify the full archive filename (interactive prompting not implemented).", output_path));
+    }
+    
+    Ok((targets, output_path))
 }
 
 #[cfg(test)]
@@ -200,5 +266,43 @@ mod tests {
             }
             _ => panic!("Expected Check command"),
         }
+    }
+
+    #[test]
+    fn test_resolve_freeze_args_basic() {
+        let args = vec![
+            PathBuf::from("t1"),
+            PathBuf::from("t2"),
+            PathBuf::from("out.sqfs"),
+        ];
+        let (targets, out) = super::resolve_freeze_args(args, None).unwrap();
+        assert_eq!(targets, vec![PathBuf::from("t1"), PathBuf::from("t2")]);
+        assert_eq!(out, PathBuf::from("out.sqfs"));
+    }
+
+    #[test]
+    fn test_resolve_freeze_args_with_file() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "file_from_list").unwrap();
+        writeln!(tmp, " # comment").unwrap();
+        writeln!(tmp, "file2_from_list").unwrap();
+        
+        let file_path = tmp.path().to_path_buf();
+        let args = vec![PathBuf::from("cli_target"), PathBuf::from("out.sqfs")];
+        
+        let (targets, out) = super::resolve_freeze_args(args, Some(file_path)).unwrap();
+        assert_eq!(out, PathBuf::from("out.sqfs"));
+        assert_eq!(targets.len(), 3);
+        assert!(targets.contains(&PathBuf::from("cli_target")));
+        assert!(targets.contains(&PathBuf::from("file_from_list")));
+        assert!(targets.contains(&PathBuf::from("file2_from_list")));
+    }
+
+    #[test]
+    fn test_resolve_freeze_args_no_output() {
+        let args = vec![];
+        let res = super::resolve_freeze_args(args, None);
+        assert!(res.is_err());
     }
 }
