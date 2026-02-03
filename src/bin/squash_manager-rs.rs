@@ -68,7 +68,8 @@ impl SquashManagerArgs {
       -e, --encrypt         Create an encrypted LUKS container (Requires root/sudo).
       -c, --compression N   Zstd compression level (default: {0}).
       --no-progress         Disable progress bar completely.
-      --vanilla-progress    Use native mksquashfs output (directories only).
+      --vanilla-progress    Use native mksquashfs progress (explicit, also default).
+      --alfa-progress       Use experimental custom progress bar (broken, for testing).
 
     Supported Input Formats (repacked on-the-fly via pipe):
       - Directory: Standard behavior
@@ -158,9 +159,13 @@ pub enum Commands {
         #[arg(long)]
         no_progress: bool,
 
-        /// Use native mksquashfs progress output instead of custom progress bar (directories only)
+        /// Use native mksquashfs progress output (explicit, also the default)
         #[arg(long)]
         vanilla_progress: bool,
+
+        /// Use experimental custom progress bar (broken, for testing only)
+        #[arg(long)]
+        alfa_progress: bool,
     },
     /// Mount a SquashFS archive to a directory (using squashfuse)
     Mount {
@@ -189,6 +194,8 @@ struct LuksTransaction<'a, E: CommandExecutor + ?Sized> {
 
 impl<'a, E: CommandExecutor + ?Sized> LuksTransaction<'a, E> {
     fn new(executor: &'a E, output_path: &'a PathBuf) -> Self {
+        // Register for cleanup on Ctrl+C (Global handler)
+        register_cleanup_path(output_path.clone());
         Self {
             executor,
             mapper_name: None,
@@ -208,6 +215,9 @@ impl<'a, E: CommandExecutor + ?Sized> LuksTransaction<'a, E> {
 
 impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
     fn drop(&mut self) {
+        // Clear global cleanup path
+        clear_cleanup_path();
+
         if let Some(mapper) = &self.mapper_name {
             // Always try to close mapper, even on success (it should be closed manually before, but if panic happens...)
             // Actually, in normal flow we close it manually to check error code. 
@@ -430,6 +440,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             compression,
             no_progress,
             vanilla_progress,
+            alfa_progress,
         } => {
             // Define compression strategy
             let comp_mode = CompressionMode::from_level(compression);
@@ -605,16 +616,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let output = if no_progress {
                         // No progress at all - just run silently
                         executor.run(&mk_prog, &mk_refs)?
-                    } else if vanilla_progress {
-                        // Use mksquashfs native progress (interactive mode)
-                        let status = executor.run_interactive(&mk_prog, &mk_refs)?;
-                        std::process::Output {
-                            status,
-                            stdout: vec![],
-                            stderr: vec![],
-                        }
-                    } else {
-                        // Custom progress bar - parse stdout for percentages
+                    } else if alfa_progress {
+                        // EXPERIMENTAL: Custom progress bar - parse stdout for percentages (currently broken)
                         // Get directory size for display
                         let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
                             if du_output.status.success() {
@@ -643,6 +646,14 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                             pb.finish_with_message("✗ Failed");
                         }
                         result
+                    } else {
+                        // DEFAULT: Use mksquashfs native progress (interactive mode)
+                        let status = executor.run_interactive(&mk_prog, &mk_refs)?;
+                        std::process::Output {
+                            status,
+                            stdout: vec![],
+                            stderr: vec![],
+                        }
                     };
 
                     if !output.status.success() {
@@ -876,14 +887,14 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
             let mut cmd_args = vec![input_str, output_str];
 
-            // Progress control
+            // Progress control for PLAIN mode: custom progress is default
             if no_progress {
                 cmd_args.push("-no-progress");
             } else if vanilla_progress {
-                // Native mksquashfs progress output
+                // Explicit vanilla mode - show native mksquashfs progress
                 cmd_args.push("-info");
             } else {
-                // Custom progress bar - disable mksquashfs output
+                // DEFAULT for plain: Custom progress bar - disable mksquashfs output
                 cmd_args.push("-no-progress");
             }
 
@@ -905,7 +916,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     return Err(anyhow!("mksquashfs failed"));
                 }
             } else {
-                // Custom progress bar mode
+                // DEFAULT for plain: Custom progress bar mode
                 // Get directory size for progress estimation
                 let dir_size = if let Ok(output) = executor.run("du", &["-sb", input_str]) {
                     if output.status.success() {
@@ -1384,6 +1395,7 @@ mod tests {
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
                 vanilla_progress: false,
+                alfa_progress: false,
             },
         };
 
@@ -1523,6 +1535,7 @@ mod tests {
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
                 vanilla_progress: false,
+                alfa_progress: false,
             },
         };
 
@@ -1657,6 +1670,7 @@ mod tests {
                 compression: 0,
                 no_progress: true,
                 vanilla_progress: false,
+                alfa_progress: false,
             },
         };
 
