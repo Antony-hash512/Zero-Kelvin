@@ -289,22 +289,52 @@ impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
         clear_cleanup_mapper();
 
         if let Some(mapper) = &self.mapper_name {
+            // debug logging
+            if std::env::var("RUST_LOG").is_ok() {
+                eprintln!("\nDEBUG: LuksTransaction drop. Closing mapper: {}", mapper);
+            }
+
+            // Sync and wait for udev to prevent "device busy" from udisks/scanners
+            let _ = self.executor.run("sync", &[]);
+            let _ = self.executor.run("udevadm", &["settle"]);
+
             // Always try to close mapper, even on success.
             // Retry loop to handle race conditions where device might still be busy (e.g. mksquashfs just exited)
-            for i in 0..5 {
-                let res = self.executor.run("sudo", &["cryptsetup", "close", mapper]);
-                if let Ok(output) = res {
-                    if output.status.success() {
-                        break;
-                    } else if i == 4 {
-                        // Only log error on final failure
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        eprintln!("\nWarning: Failed to close LUKS mapper '{}': {}", mapper, stderr);
+            let root_cmds = get_effective_root_cmd();
+            
+            for i in 0..10 {
+                let mut close_args = root_cmds.clone();
+                close_args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper.clone()]);
+                let prog = close_args.remove(0);
+                let refs: Vec<&str> = close_args.iter().map(|s| s.as_str()).collect();
+
+                let res = self.executor.run(&prog, &refs);
+                match res {
+                    Ok(output) => {
+                         if output.status.success() {
+                             if std::env::var("RUST_LOG").is_ok() {
+                                 eprintln!("DEBUG: Mapper closed successfully on attempt {}", i+1);
+                             }
+                             break;
+                         } else {
+                             if std::env::var("RUST_LOG").is_ok() {
+                                 let stderr = String::from_utf8_lossy(&output.stderr);
+                                 eprintln!("DEBUG: Attempt {} failed. Status: {}. Stderr: {}", i+1, output.status, stderr);
+                             } else if i == 9 {
+                                 let stderr = String::from_utf8_lossy(&output.stderr);
+                                 eprintln!("\nWarning: Failed to close LUKS mapper '{}': {}", mapper, stderr);
+                             }
+                         }
+                    },
+                    Err(e) => {
+                        if std::env::var("RUST_LOG").is_ok() {
+                            eprintln!("DEBUG: Execution error on attempt {}: {}", i+1, e);
+                        }
                     }
                 }
                 
-                // Exponential backoff-ish
-                std::thread::sleep(Duration::from_millis(100 * (i + 1) as u64));
+                // Exponential backoff-ish (up to 500ms)
+                std::thread::sleep(Duration::from_millis(std::cmp::min(100 * (i + 1) as u64, 500)));
             }
         }
         
@@ -795,13 +825,13 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     Err(_) => {}, // unsquashfs failed, skip trim
                 }
 
-                // 6. Close - we're already root
-                // We do explicit close here to ensure success before truncate
-                // Transaction drop will try to close again but fail harmlessly or we can clear mapper from it
-                let _ = executor.run("cryptsetup", &["close", &mapper_name]);
-                transaction.mapper_name = None; // Disable drop cleanup for mapper
+                // 6. Close and Finish Transaction
+                // We set success (preventing file deletion) and drop the transaction to trigger correct mapper closing
+                // This uses the robust logic in LuksTransaction::drop (sync, settle, retries, root rights)
+                transaction.set_success();
+                drop(transaction);
                 
-                // 7. Truncate
+                // 7. Truncate (Safe now that mapper is closed)
                 if let Some(size) = trim_size {
                     let container_file = fs::File::options().write(true).open(output_buf).context("Failed to open file for trimming")?;
                     let current_len = container_file.metadata()?.len();
@@ -812,7 +842,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     }
                 }
 
-                transaction.set_success();
+
                 return Ok(());
             }
 
@@ -1608,9 +1638,33 @@ mod tests {
                 stderr: vec![],
             }));
             
-        // 8. close - called directly without sudo
+        // 8. Transaction Drop Sequence
+        // 8.1 Sync
         mock.expect_run()
-            .withf(|program, args| program == "cryptsetup" && args.contains(&"close"))
+            .withf(|program, args| program == "sync")
+            .times(1)
+            .returning(|_, _| Ok(Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            }));
+
+        // 8.2 udevadm settle
+        mock.expect_run()
+            .withf(|program, args| program == "udevadm" && args.contains(&"settle"))
+            .times(1)
+            .returning(|_, _| Ok(Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
+            }));
+
+        // 8.3 close (from LuksTransaction drop)
+        mock.expect_run()
+            .withf(|program, args| {
+                (program == "cryptsetup" || program == "sudo") && 
+                args.contains(&"close")
+            })
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
