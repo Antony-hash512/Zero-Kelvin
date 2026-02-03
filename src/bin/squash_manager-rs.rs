@@ -14,9 +14,49 @@ use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 /// Global path for cleanup on interrupt (SIGINT/SIGTERM)
 /// Used by ctrlc handler to remove incomplete output files
 static CLEANUP_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+static CLEANUP_MAPPER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn get_effective_root_cmd() -> Vec<String> {
+    // Check if we are root via 'id -u'
+    if let Ok(output) = std::process::Command::new("id").arg("-u").output() {
+        if let Ok(uid_str) = String::from_utf8(output.stdout) {
+            if let Ok(uid) = uid_str.trim().parse::<u32>() {
+                if uid == 0 {
+                    return vec![];
+                }
+            }
+        }
+    }
+    
+    // Check env var
+    if let Ok(cmd) = std::env::var("ROOT_CMD") {
+         if !cmd.trim().is_empty() {
+             return cmd.split_whitespace().map(|s| s.to_string()).collect();
+         }
+    }
+
+    // Default to sudo
+    vec!["sudo".to_string()]
+}
 
 fn get_cleanup_path() -> &'static Mutex<Option<PathBuf>> {
     CLEANUP_PATH.get_or_init(|| Mutex::new(None))
+}
+
+fn get_cleanup_mapper() -> &'static Mutex<Option<String>> {
+    CLEANUP_MAPPER.get_or_init(|| Mutex::new(None))
+}
+
+fn register_cleanup_mapper(name: String) {
+    if let Ok(mut guard) = get_cleanup_mapper().lock() {
+        *guard = Some(name);
+    }
+}
+
+fn clear_cleanup_mapper() {
+    if let Ok(mut guard) = get_cleanup_mapper().lock() {
+        *guard = None;
+    }
 }
 
 fn register_cleanup_path(path: PathBuf) {
@@ -32,10 +72,26 @@ fn clear_cleanup_path() {
 }
 
 fn cleanup_on_interrupt() {
+    // 1. Close mapper if exists (must happen BEFORE file removal)
+    if let Ok(guard) = get_cleanup_mapper().lock() {
+        if let Some(mapper) = guard.as_ref() {
+            eprintln!("\nInterrupted! Closing LUKS mapper: {}", mapper);
+            let root_cmds = get_effective_root_cmd();
+            let mut args = root_cmds.clone();
+            args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper.clone()]);
+            
+            // We use standard process::Command here because we are in a signal handler context
+            // and don't have access to the executor trait.
+            let prog = args.remove(0);
+            let _ = process::Command::new(prog).args(args).status();
+        }
+    }
+
+    // 2. Remove file
     if let Ok(guard) = get_cleanup_path().lock() {
         if let Some(path) = guard.as_ref() {
             if path.exists() {
-                eprintln!("\nInterrupted! Cleaning up: {:?}", path);
+                eprintln!("Interrupted! Cleaning up file: {:?}", path);
                 let _ = fs::remove_file(path);
             }
         }
@@ -205,6 +261,8 @@ impl<'a, E: CommandExecutor + ?Sized> LuksTransaction<'a, E> {
     }
 
     fn set_mapper(&mut self, name: String) {
+        // Register for cleanup on interrupt
+        register_cleanup_mapper(name.clone());
         self.mapper_name = Some(name);
     }
 
@@ -215,8 +273,9 @@ impl<'a, E: CommandExecutor + ?Sized> LuksTransaction<'a, E> {
 
 impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
     fn drop(&mut self) {
-        // Clear global cleanup path
+        // Clear global cleanup registration
         clear_cleanup_path();
+        clear_cleanup_mapper();
 
         if let Some(mapper) = &self.mapper_name {
             // Always try to close mapper, even on success (it should be closed manually before, but if panic happens...)
@@ -373,28 +432,7 @@ fn main() -> Result<()> {
 }
 
 /// Helper to determine if we need sudo/doas
-fn get_effective_root_cmd() -> Vec<String> {
-    // Check if we are root via 'id -u'
-    if let Ok(output) = std::process::Command::new("id").arg("-u").output() {
-        if let Ok(uid_str) = String::from_utf8(output.stdout) {
-            if let Ok(uid) = uid_str.trim().parse::<u32>() {
-                if uid == 0 {
-                    return vec![];
-                }
-            }
-        }
-    }
-    
-    // Check env var
-    if let Ok(cmd) = std::env::var("ROOT_CMD") {
-         if !cmd.trim().is_empty() {
-             return cmd.split_whitespace().map(|s| s.to_string()).collect();
-         }
-    }
 
-    // Default to sudo
-    vec!["sudo".to_string()]
-}
 
 /// Check if the image file is a LUKS container
 /// Note: cryptsetup isLuks only reads the file header and doesn't require root privileges
