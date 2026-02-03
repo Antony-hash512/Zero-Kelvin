@@ -17,7 +17,12 @@ impl ZksArgs {
         use clap::CommandFactory;
         let cmd = Self::command();
         cmd.after_help("Detailed Command Information:
-
+ _____                _  __    _       _         ____  _            _     
+|__  /___ _ __ ___   | |/ /___| |_   _(_)_ __   / ___|| |_ __ _ ___(_)___ 
+  / // _ \ '__/ _ \  | ' // _ \ \ \ / / | '_ \  \___ \| __/ _` |_  / / __|
+ / /|  __/ | | (_) | | . \  __/ |\ V /| | | | |  ___) | || (_| |/ /| \__ \
+/____\___|_|  \___/  |_|\_\___|_| \_/ |_|_| |_| |____/ \__\__,_/___|_|___/
+                                                                          
   freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
     Offload data to a SquashFS archive (frozen state).
     Arguments:

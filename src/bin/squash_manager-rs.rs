@@ -125,7 +125,12 @@ impl SquashManagerArgs {
         use clap::CommandFactory;
         let cmd = Self::command();
         cmd.after_help(format!("Detailed Command Information:
-
+ ____                        _       __  __                                   
+/ ___|  __ _ _   _  __ _ ___| |__   |  \/  | __ _ _ __   __ _  __ _  ___ _ __ 
+\___ \ / _` | | | |/ _` / __| '_ \  | |\/| |/ _` | '_ \ / _` |/ _` |/ _ \ '__|
+ ___) | (_| | |_| | (_| \__ \ | | | | |  | | (_| | | | | (_| | (_| |  __/ |   
+|____/ \__, |\__,_|\__,_|___/_| |_| |_|  |_|\__,_|_| |_|\__,_|\__, |\___|_|   
+          |_|                                                 |___/           
   create <INPUT> [OUTPUT] [OPTIONS]
     Convert a directory or an archive into a SquashFS image.
     Arguments:
