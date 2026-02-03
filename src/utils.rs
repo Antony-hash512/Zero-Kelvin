@@ -90,4 +90,68 @@ mod tests {
     
     // We can add a "simulated" test that doesn't rely on system state if we refactor `check_root_or_get_runner` 
     // to take a closure for `is_root_check`. But let's stick to the prompt's request for "unit tests for parser".
+
+    // --- check_read_permissions tests ---
+    
+    #[test]
+    fn test_check_read_permissions_readable() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("readable.txt");
+        fs::write(&file, "content").unwrap();
+        
+        // Pass slice of PathBuf
+        let paths = vec![file];
+        assert!(check_read_permissions(&paths).unwrap());
+    }
+    
+    #[test]
+    fn test_check_read_permissions_unreadable() {
+        // Skip this test if we are root, because root can read everything
+        if is_root().unwrap() {
+            return;
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("secret.txt");
+        fs::write(&file, "content").unwrap();
+        
+        // Make unreadable
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&file, perms).unwrap();
+        
+        let paths = vec![file];
+        assert!(!check_read_permissions(&paths).unwrap());
+    }
+}
+
+use std::path::PathBuf;
+
+pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool> {
+    for path in paths {
+        // If path doesn't exist, we can't read it. But usually this should be checked before.
+        // If it doesn't exist, returning error or false? 
+        // Logic: "analyze permissions to targets". If target missing, freeze should fail.
+        // Return error if missing.
+        
+        let metadata = fs::metadata(path).map_err(|e| anyhow!("Failed to access {:?}: {}", path, e))?;
+
+        if metadata.is_dir() {
+            if let Err(e) = fs::read_dir(path) {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Ok(false);
+                }
+                return Err(anyhow!("Failed to read directory {:?}: {}", path, e));
+            }
+        } else {
+            if let Err(e) = fs::File::open(path) {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Ok(false);
+                }
+                return Err(anyhow!("Failed to open file {:?}: {}", path, e));
+            }
+        }
+    }
+    Ok(true)
 }
