@@ -76,6 +76,17 @@ fn cleanup_on_interrupt() {
     if let Ok(guard) = get_cleanup_mapper().lock() {
         if let Some(mapper) = guard.as_ref() {
             eprintln!("\nInterrupted! Closing LUKS mapper: {}", mapper);
+            
+            // Critical: Kill child processes (mksquashfs) which might be holding the device open
+            let my_pid = process::id();
+            let _ = process::Command::new("pkill")
+                .arg("-P")
+                .arg(my_pid.to_string())
+                .status();
+
+            // Give a moment for the kernel/device release
+            std::thread::sleep(Duration::from_millis(200));
+
             let root_cmds = get_effective_root_cmd();
             let mut args = root_cmds.clone();
             args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper.clone()]);
@@ -278,13 +289,23 @@ impl<'a, E: CommandExecutor + ?Sized> Drop for LuksTransaction<'a, E> {
         clear_cleanup_mapper();
 
         if let Some(mapper) = &self.mapper_name {
-            // Always try to close mapper, even on success (it should be closed manually before, but if panic happens...)
-            // Actually, in normal flow we close it manually to check error code. 
-            // This drop is mostly for panic/error path.
-            // If we closed it manually, the check "if exists" would be good, but we can't easily check existence without command.
-            // We'll rely on cryptsetup erroring if not exists, or check /dev/mapper.
-            // Silence errors here to avoid panic-in-drop.
-            let _ = self.executor.run("sudo", &["cryptsetup", "close", mapper]);
+            // Always try to close mapper, even on success.
+            // Retry loop to handle race conditions where device might still be busy (e.g. mksquashfs just exited)
+            for i in 0..5 {
+                let res = self.executor.run("sudo", &["cryptsetup", "close", mapper]);
+                if let Ok(output) = res {
+                    if output.status.success() {
+                        break;
+                    } else if i == 4 {
+                        // Only log error on final failure
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("\nWarning: Failed to close LUKS mapper '{}': {}", mapper, stderr);
+                    }
+                }
+                
+                // Exponential backoff-ish
+                std::thread::sleep(Duration::from_millis(100 * (i + 1) as u64));
+            }
         }
         
         if !self.success {
@@ -1233,9 +1254,9 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     // We try regular user first, then root if needed
                     let mut losetup_output = executor.run("losetup", &["-j", abs_path_str]);
                     
-                    // Fallback to root if failed or empty
+                    // Fallback to root only if failed (permission denied), not if just empty (no loops found)
                     if let Ok(ref out) = losetup_output {
-                        if !out.status.success() || out.stdout.is_empty() {
+                        if !out.status.success() {
                             let mut args = root_cmd.clone();
                             args.extend(vec!["losetup".to_string(), "-j".to_string(), abs_path_str.to_string()]);
                             let prog = args.remove(0);
@@ -1274,7 +1295,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                                                     let mut dm_output = executor.run("dmsetup", &["deps", "-o", "devname", mapper_name]);
                                                     
                                                     if let Ok(ref out) = dm_output {
-                                                        if !out.status.success() || out.stdout.is_empty() {
+                                                        if !out.status.success() {
                                                              let mut args = root_cmd.clone();
                                                              args.extend(vec!["dmsetup".to_string(), "deps".to_string(), "-o".to_string(), "devname".to_string(), mapper_name.to_string()]);
                                                              let prog = args.remove(0);
