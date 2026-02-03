@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
+use regex::Regex;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
@@ -24,6 +26,15 @@ pub trait CommandExecutor {
         output_file: &Path,
         progress_bar: &ProgressBar,
         poll_interval: Duration,
+    ) -> Result<Output>;
+
+    /// Runs a command while parsing stdout for progress percentage.
+    /// Looks for patterns like "45%" in stdout and updates the progress bar (0-100 scale).
+    fn run_with_stdout_progress<'a>(
+        &self,
+        program: &str,
+        args: &[&'a str],
+        progress_bar: &ProgressBar,
     ) -> Result<Output>;
 }
 
@@ -92,6 +103,56 @@ impl CommandExecutor for RealSystem {
         // Get the output
         let output = child.wait_with_output()
             .with_context(|| format!("Failed to get output from command: {} {:?}", program, args))?;
+        
+        Ok(output)
+    }
+
+    fn run_with_stdout_progress<'a>(
+        &self,
+        program: &str,
+        args: &[&'a str],
+        progress_bar: &ProgressBar,
+    ) -> Result<Output> {
+        // Regex to find percentage like "45%" or "100%"
+        let percent_re = Regex::new(r"(\d+)%").expect("Invalid regex");
+        
+        // Spawn the command with piped stdout
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("Failed to spawn command: {} {:?}", program, args))?;
+
+        // Take stdout handle for reading
+        let stdout = child.stdout.take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+        
+        let reader = BufReader::new(stdout);
+        
+        // Read stdout line by line, parse percentage
+        for line in reader.lines() {
+            if let Ok(line_str) = line {
+                // Find last percentage in line (mksquashfs outputs "[===...] 1/2 50%")
+                if let Some(caps) = percent_re.captures_iter(&line_str).last() {
+                    if let Some(pct_match) = caps.get(1) {
+                        if let Ok(pct) = pct_match.as_str().parse::<u64>() {
+                            progress_bar.set_position(pct);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wait for process to finish and collect stderr
+        let output = child.wait_with_output()
+            .with_context(|| format!("Failed to get output from command: {} {:?}", program, args))?;
+        
+        // Final update to 100% if successful
+        if output.status.success() {
+            progress_bar.set_position(100);
+        }
         
         Ok(output)
     }

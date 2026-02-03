@@ -601,7 +601,50 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let mk_prog = mk_args.remove(0);
                     let mk_refs: Vec<&str> = mk_args.iter().map(|s| s.as_str()).collect();
 
-                    let output = executor.run(&mk_prog, &mk_refs)?;
+                    // Progress bar logic based on flags
+                    let output = if no_progress {
+                        // No progress at all - just run silently
+                        executor.run(&mk_prog, &mk_refs)?
+                    } else if vanilla_progress {
+                        // Use mksquashfs native progress (interactive mode)
+                        let status = executor.run_interactive(&mk_prog, &mk_refs)?;
+                        std::process::Output {
+                            status,
+                            stdout: vec![],
+                            stderr: vec![],
+                        }
+                    } else {
+                        // Custom progress bar - parse stdout for percentages
+                        // Get directory size for display
+                        let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
+                            if du_output.status.success() {
+                                let out_str = String::from_utf8_lossy(&du_output.stdout);
+                                out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
+                            } else { 0 }
+                        } else { 0 };
+                        let dir_size_mb = dir_size as f64 / 1024.0 / 1024.0;
+                        
+                        let pb = ProgressBar::new(100);
+                        pb.set_style(
+                            ProgressStyle::with_template(
+                                "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% {msg}"
+                            )
+                            .unwrap()
+                            .progress_chars("█▓▒░  ")
+                        );
+                        pb.set_message("Encrypting → SquashFS+LUKS");
+                        pb.enable_steady_tick(Duration::from_millis(100));
+                        
+                        let result = executor.run_with_stdout_progress(&mk_prog, &mk_refs, &pb)?;
+                        
+                        if result.status.success() {
+                            pb.finish_with_message(format!("✓ Encrypted {:.1} MB", dir_size_mb));
+                        } else {
+                            pb.finish_with_message("✗ Failed");
+                        }
+                        result
+                    };
+
                     if !output.status.success() {
                          Err(anyhow!("mksquashfs failed: {}", String::from_utf8_lossy(&output.stderr)))
                     } else { Ok(()) }
@@ -1288,6 +1331,12 @@ mod tests {
                 progress_bar: &indicatif::ProgressBar,
                 poll_interval: std::time::Duration,
             ) -> Result<Output>;
+            fn run_with_stdout_progress<'a>(
+                &self,
+                program: &str,
+                args: &[&'a str],
+                progress_bar: &indicatif::ProgressBar,
+            ) -> Result<Output>;
         }
     }
 
@@ -1472,7 +1521,7 @@ mod tests {
                 output_path: Some(output_path),
                 encrypt: true,
                 compression: DEFAULT_ZSTD_COMPRESSION,
-                no_progress: false,
+                no_progress: true,
                 vanilla_progress: false,
             },
         };

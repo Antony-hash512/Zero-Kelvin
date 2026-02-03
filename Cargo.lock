@@ -910,6 +910,7 @@ dependencies = [
  "mockall",
  "predicates",
  "rand",
+ "regex",
  "serde",
  "serde_yaml",
  "tempfile",
