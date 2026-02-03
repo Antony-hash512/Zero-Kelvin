@@ -293,135 +293,6 @@ fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -
     10
 }
 
-/// Get uncompressed size of an archive file.
-/// Uses format-specific tools to determine the actual uncompressed size.
-/// Falls back to compressed_size * safety_multiplier if detection fails.
-fn get_archive_uncompressed_size(path: &PathBuf, executor: &impl CommandExecutor) -> u64 {
-    let file_name = path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    
-    let path_str = path.to_str().unwrap_or("");
-    let compressed_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    
-    // Safety multiplier for fallback (archives can be 10-20x smaller than uncompressed)
-    let fallback_size = compressed_size.saturating_mul(10);
-    
-    // Try to get exact uncompressed size based on format
-    let uncompressed = if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
-        // gzip -l shows: compressed, uncompressed, ratio, name
-        // Note: gzip -l may report incorrect size for files > 4GB (32-bit limitation)
-        if let Ok(output) = executor.run("gzip", &["-l", path_str]) {
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout);
-                // Parse second line, second column (uncompressed)
-                if let Some(line) = out_str.lines().nth(1) {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let Ok(size) = parts[1].parse::<u64>() {
-                            // gzip -l has 32-bit overflow for files > 4GB
-                            // If reported uncompressed < compressed, use fallback
-                            if size > compressed_size {
-                                return size;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        fallback_size
-    } else if file_name.ends_with(".tar.zst") || file_name.ends_with(".tzst") {
-        // zstd --list shows decompressed size
-        if let Ok(output) = executor.run("zstd", &["--list", path_str]) {
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout);
-                // Look for "Decompressed Size:" line
-                for line in out_str.lines() {
-                    if line.contains("Decompressed Size:") {
-                        // Parse size with suffix (KB, MB, GB)
-                        let parts: Vec<&str> = line.split(':').collect();
-                        if parts.len() >= 2 {
-                            let size_part = parts[1].trim();
-                            if let Some(bytes) = parse_size_with_suffix(size_part) {
-                                return bytes;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        fallback_size
-    } else if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
-        // xz -l shows uncompressed size
-        if let Ok(output) = executor.run("xz", &["-l", path_str]) {
-            if output.status.success() {
-                let out_str = String::from_utf8_lossy(&output.stdout);
-                // Parse "Uncompressed" column (second data line)
-                for line in out_str.lines() {
-                    if line.contains("MiB") || line.contains("GiB") || line.contains("KiB") {
-                        let parts: Vec<&str> = line.split_whitespace().collect();
-                        // Format: Strms  Blocks   Compressed Uncompressed  Ratio  Check   Filename
-                        if parts.len() >= 5 {
-                            // Uncompressed is column 4 (index 3) with suffix in column 5 (index 4)
-                            let size_str = format!("{} {}", parts[3], parts[4]);
-                            if let Some(bytes) = parse_size_with_suffix(&size_str) {
-                                return bytes;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        fallback_size
-    } else if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") {
-        // bzip2 doesn't store uncompressed size, use fallback
-        fallback_size
-    } else if file_name.ends_with(".tar") {
-        // Plain tar - actual size is the file size
-        compressed_size
-    } else {
-        // Other formats (zip, 7z, rar) - use fallback
-        fallback_size
-    };
-    
-    if std::env::var("RUST_LOG").is_ok() {
-        eprintln!("DEBUG: Archive uncompressed size estimate: {} bytes (compressed: {} bytes)", 
-            uncompressed, compressed_size);
-    }
-    
-    uncompressed
-}
-
-/// Parse size string with suffix (KB, MB, GB, KiB, MiB, GiB)
-fn parse_size_with_suffix(s: &str) -> Option<u64> {
-    let s = s.trim();
-    
-    // Try to find number and suffix
-    let mut num_str = String::new();
-    let mut suffix = String::new();
-    
-    for c in s.chars() {
-        if c.is_ascii_digit() || c == '.' || c == ',' {
-            num_str.push(if c == ',' { '.' } else { c });
-        } else if c.is_alphabetic() {
-            suffix.push(c);
-        }
-    }
-    
-    let num: f64 = num_str.parse().ok()?;
-    
-    let multiplier = match suffix.to_uppercase().as_str() {
-        "B" | "" => 1.0,
-        "K" | "KB" | "KIB" => 1024.0,
-        "M" | "MB" | "MIB" => 1024.0 * 1024.0,
-        "G" | "GB" | "GIB" => 1024.0 * 1024.0 * 1024.0,
-        "T" | "TB" | "TIB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
-    };
-    
-    Some((num * multiplier) as u64)
-}
 
 fn main() -> Result<()> {
     if std::env::var("RUST_LOG").is_err() {
@@ -564,46 +435,75 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             let comp_mode = CompressionMode::from_level(compression);
 
             if encrypt {
-                // Determine raw size
-                // For directories: use du -sb
-                // For archives: use uncompressed size (not compressed file size!)
-                let raw_size_bytes = if input_path.is_dir() {
-                    // du -sb
-                     if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
-                        if output.status.success() {
-                            let out_str = String::from_utf8_lossy(&output.stdout);
-                            out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
-                        } else {
-                            0
-                        }
-                     } else { 0 }
-                } else {
-                    // For archives, get uncompressed size (not just file size!)
-                    get_archive_uncompressed_size(&input_path, executor)
-                };
+                // CRITICAL CHANGE: Disable archive support for LUKS due to persistent I/O errors
+                if !input_path.is_dir() {
+                    return Err(anyhow!("Encrypted mode (-e) currently supports only DIRECTORIES.\nPlease extract the archive first and point to the directory."));
+                }
+
+                // Determine raw size (now strictly for directories)
+                // du -sb
+                let raw_size_bytes = if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
+                    if output.status.success() {
+                        let out_str = String::from_utf8_lossy(&output.stdout);
+                        out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
+                    } else {
+                        0
+                    }
+                } else { 0 };
 
                 if raw_size_bytes == 0 {
-                    return Err(anyhow!("Could not determine input size or empty input"));
+                    return Err(anyhow!("Could not determine input directory size or empty input"));
                 }
 
                 let output_buf = output_path.as_ref().ok_or(anyhow!("Output path required"))?;
                 
                 // Overhead calc
-                let overhead_percent = get_fs_overhead_percentage(output_buf, executor);
-                let overhead_bytes = (raw_size_bytes as f64 * (overhead_percent as f64 / 100.0)) as u64;
-                let luks_header_bytes = 32 * 1024 * 1024; // 32MB safety
+                let fs_overhead = get_fs_overhead_percentage(output_buf, executor);
+                let overhead_percent = fs_overhead;
                 
-                let container_size = raw_size_bytes + overhead_bytes + luks_header_bytes;
+                let overhead_bytes = (raw_size_bytes as f64 * (overhead_percent as f64 / 100.0)) as u64;
+                let luks_header_bytes = 32 * 1024 * 1024; // 32MB for LUKS2 header
+                let safety_buffer = 128 * 1024 * 1024; // 128MB safety buffer
+                
+                let unaligned_size = raw_size_bytes + overhead_bytes + luks_header_bytes + safety_buffer;
+                
+                // Align to 1MB (1024*1024) to ensure loop device creates exactly this size
+                // (avoiding partial sectors which could be dropped by kernel)
+                let align_size = 1024 * 1024;
+                let container_size = (unaligned_size + align_size - 1) / align_size * align_size;
 
                 if std::env::var("RUST_LOG").is_ok() {
-                    eprintln!("DEBUG: Encrypting. Input: {} bytes. Overhead: {}%. Allocating: {} bytes.", 
+                    eprintln!("DEBUG: Encrypting directory. Input: {} bytes. Overhead: {}%. Allocating: {} bytes.", 
                         raw_size_bytes, overhead_percent, container_size);
                 }
 
-                // 1. Create sparse file
-                let file = fs::File::create(output_buf).context("Failed to create container file")?;
-                file.set_len(container_size).context("Failed to pre-allocate container size")?;
-                drop(file); // Close to allow cryptsetup to use it via path
+                // 1. Create container file with actual allocated space
+                // Using fallocate instead of sparse file (set_len) because:
+                // - Loop devices may fail to write to unallocated sparse regions
+                // - Some filesystems don't support sparse writes through loop
+                // fallocate -l <size> <file>
+                let size_str = container_size.to_string();
+                let output_str_create = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                
+                let fallocate_output = executor.run("fallocate", &["-l", &size_str, output_str_create]);
+                if let Ok(output) = fallocate_output {
+                    if !output.status.success() {
+                        // Fallback to dd if fallocate fails (e.g., on some filesystems)
+                        let count = (container_size / (1024 * 1024)) + 1; // Convert to MB
+                        let dd_output = executor.run("dd", &[
+                            "if=/dev/zero",
+                            &format!("of={}", output_str_create),
+                            "bs=1M",
+                            &format!("count={}", count),
+                            "status=none"
+                        ])?;
+                        if !dd_output.status.success() {
+                            return Err(anyhow!("Failed to create container file"));
+                        }
+                    }
+                } else {
+                    return Err(anyhow!("Failed to run fallocate"));
+                }
 
                 // Start Transaction for cleanup
                 let mut transaction = LuksTransaction::new(executor, output_buf);
@@ -661,8 +561,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let mapper_path = format!("/dev/mapper/{}", mapper_name);
 
                 // 4. Pack Data
-                // If input is dir -> mksquashfs to mapper_path
-                let pack_result = if input_path.is_dir() {
+                // Execute mksquashfs to mapper_path
+                let pack_result = {
                     let mut cmd_args = vec![
                          input_path.to_str().unwrap().to_string(),
                          mapper_path.clone(),
@@ -704,47 +604,6 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let output = executor.run(&mk_prog, &mk_refs)?;
                     if !output.status.success() {
                          Err(anyhow!("mksquashfs failed: {}", String::from_utf8_lossy(&output.stderr)))
-                    } else { Ok(()) }
-                } else {
-                     // Archive repack
-                    let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
-                    
-                    let file_name = input_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    let decompressor = if file_name.ends_with(".tar") { "cat" }
-                    else if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") { "gzip -dc" }
-                    else if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") { "bzip2 -dc" }
-                    else if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") { "xz -dc" }
-                    else if file_name.ends_with(".tar.zst") || file_name.ends_with(".tzst") { "zstd -dc" }
-                    else if file_name.ends_with(".tar.zip") { "unzip -p" }
-                    else if file_name.ends_with(".tar.7z") { "7z x -so" }
-                    else if file_name.ends_with(".tar.rar") { "unrar p -inul" }
-                    else { return Err(anyhow!("Unsupported format: {}", file_name)); };
-
-                    let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
-                    
-                    // Pipeline: decompress | tar2sqfs -> /dev/mapper
-                    // Need sudo for tar2sqfs writing to mapper? 
-                    // Yes, likely.
-                    // But we can't easily pipe INTO sudo tar2sqfs.
-                    // solution: sudo sh -c "decompress ... | tar2sqfs ... -o /dev/mapper/..."
-                    // Wait, input file might be user owned. sudo decompress is accessing user file. Fine.
-                    let cmd = format!(
-                        "set -o pipefail; {} '{}' | tar2sqfs --quiet --no-skip --force {} '{}'",
-                        decompressor,
-                        input_str.replace("'", "'\\''"),
-                        compressor_flag,
-                        mapper_path
-                    );
-                    
-                    let mut sh_args = root_cmd.clone();
-                    sh_args.extend(vec!["sh".to_string(), "-c".to_string(), cmd]);
-                    
-                    let sh_prog = sh_args.remove(0);
-                    let sh_refs: Vec<&str> = sh_args.iter().map(|s| s.as_str()).collect();
-                    
-                    let output = executor.run(&sh_prog, &sh_refs)?;
-                    if !output.status.success() {
-                         Err(anyhow!("Archive repack failed: {}", String::from_utf8_lossy(&output.stderr)))
                     } else { Ok(()) }
                 };
 
@@ -1521,6 +1380,25 @@ mod tests {
                 stdout: b"ext2/ext3\n".to_vec(),
                 stderr: vec![],
             }));
+
+        // 2.5. fallocate (Container creation)
+        // Need to capture output_path to create the file in the returning closure
+
+        mock.expect_run()
+            .withf(|program, args| {
+                program == "fallocate" && args.len() == 3 && args[0] == "-l"
+            })
+            .times(1)
+            .returning(move |_, args| {
+                // Create the file that fallocate would create
+                let file_path = args[2];
+                let _ = fs::File::create(file_path);
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
 
         // 3. luksFormat
         let output_str_3 = output_str.clone();
