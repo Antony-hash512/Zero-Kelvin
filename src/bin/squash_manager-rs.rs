@@ -965,6 +965,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             if !image.exists() {
                 return Err(anyhow!("Image file does not exist: {:?}", image));
             }
+            // Always use absolute path to ensure losetup/detection works reliably
+            let image = fs::canonicalize(image).context("Failed to canonicalize image path")?;
 
             let target_mount_point = match mount_point {
                 Some(path) => path,
@@ -1103,6 +1105,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
         Commands::Umount { mount_point } => {
             let path = &mount_point;
+            let root_cmd = get_effective_root_cmd();
             
             if !path.exists() {
                 return Err(anyhow!("Path does not exist: {:?}", path));
@@ -1189,7 +1192,21 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     
                     // Find loop device(s) associated with this file
                     // losetup -j <file> shows: /dev/loop0: []: (<file>)
-                    if let Ok(output) = executor.run("losetup", &["-j", abs_path_str]) {
+                    // We try regular user first, then root if needed
+                    let mut losetup_output = executor.run("losetup", &["-j", abs_path_str]);
+                    
+                    // Fallback to root if failed or empty
+                    if let Ok(ref out) = losetup_output {
+                        if !out.status.success() || out.stdout.is_empty() {
+                            let mut args = root_cmd.clone();
+                            args.extend(vec!["losetup".to_string(), "-j".to_string(), abs_path_str.to_string()]);
+                            let prog = args.remove(0);
+                            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                            losetup_output = executor.run(&prog, &refs);
+                        }
+                    }
+
+                    if let Ok(output) = losetup_output {
                         if output.status.success() {
                             let out_str = String::from_utf8_lossy(&output.stdout);
                             for line in out_str.lines() {
@@ -1214,7 +1231,21 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                                                     // Verify this mapper uses our loop device
                                                     // dmsetup table sq_* shows the backing device
                                                     let mapper_name = source.trim_start_matches("/dev/mapper/");
-                                                    if let Ok(dm_output) = executor.run("dmsetup", &["deps", "-o", "devname", mapper_name]) {
+                                                    
+                                                    // Try dmsetup (user -> root fallback)
+                                                    let mut dm_output = executor.run("dmsetup", &["deps", "-o", "devname", mapper_name]);
+                                                    
+                                                    if let Ok(ref out) = dm_output {
+                                                        if !out.status.success() || out.stdout.is_empty() {
+                                                             let mut args = root_cmd.clone();
+                                                             args.extend(vec!["dmsetup".to_string(), "deps".to_string(), "-o".to_string(), "devname".to_string(), mapper_name.to_string()]);
+                                                             let prog = args.remove(0);
+                                                             let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                                                             dm_output = executor.run(&prog, &refs);
+                                                        }
+                                                    }
+
+                                                    if let Ok(dm_output) = dm_output {
                                                         if dm_output.status.success() {
                                                             let dm_str = String::from_utf8_lossy(&dm_output.stdout);
                                                             // Output like: 1 dependencies  : (loop0)
@@ -1257,7 +1288,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 }
                 
                 // Get root_cmd only if needed (for LUKS unmount operations)
-                let root_cmd = get_effective_root_cmd();
+                // root_cmd is now retrieved at function scope
+                // let root_cmd = get_effective_root_cmd();
 
                 
                 // Determine unmount method based on source device
