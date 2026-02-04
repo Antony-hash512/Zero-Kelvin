@@ -228,11 +228,13 @@ pub fn check<E: CommandExecutor>(
     // 3. Perform Check
     println!("Checking {} files from archive...", manifest.files.len());
     
-    let mut stats_match = 0;
+    let mut stats_files_matched = 0;
+    let mut stats_dirs_matched = 0;
     let mut stats_mismatch = 0;
     let mut stats_missing = 0;
     let mut stats_skipped = 0;
-    let mut stats_deleted = 0;
+    let mut stats_files_deleted = 0;
+    let mut stats_dirs_deleted = 0;
 
     for entry in &manifest.files {
         // ... (Path resolution logic is same)
@@ -255,16 +257,13 @@ pub fn check<E: CommandExecutor>(
             .join(entry.id.to_string())
             .join(entry_name_in_mount);
 
-        // Recursive walker
-        // We walk the MOUNT point because that is the reference state.
-        // We want to ensure every file in archive exists and matches in live.
-        
         if !mount_root.exists() {
              println!("ERROR: Archive corrupted, missing internal root for id {}", entry.id);
              continue;
         }
 
-        let walker = walkdir::WalkDir::new(&mount_root);
+        // Walker: contents_first(true) permits deleting dirs after their contents
+        let walker = walkdir::WalkDir::new(&mount_root).contents_first(true);
         
         for item in walker.into_iter().filter_map(|e| e.ok()) {
             let mount_path = item.path();
@@ -300,15 +299,34 @@ pub fn check<E: CommandExecutor>(
 
             // Check Type
             if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
-               live_meta.file_type().is_file() != mount_meta.file_type().is_file() { // Ignore symlinks details for now?
+               live_meta.file_type().is_file() != mount_meta.file_type().is_file() { 
                 println!("MISMATCH (Type): {}", display_name);
                 stats_mismatch += 1;
                 continue;
             }
             
             if live_meta.is_dir() {
-                println!("MATCH (Dir): {}", display_name);
-                stats_match += 1;
+                // Directory: Try delete if forced, else just match
+                if options.force_delete {
+                     // Try to remove. If not empty (because some children were skipped), it will fail safely.
+                     if let Err(e) = fs::remove_dir(&live_path) {
+                         // Check if it's "Directory not empty"
+                         if e.kind() == std::io::ErrorKind::DirectoryNotEmpty || e.raw_os_error() == Some(39) { // 39 is ENOTEMPTY
+                             // This is expected if we skipped files.
+                             // Count as "Matched" (structure exists)
+                             println!("MATCH (Dir): {}", display_name); 
+                             stats_dirs_matched += 1;
+                         } else {
+                             println!("ERROR: Failed to delete dir {}: {}", display_name, e);
+                         }
+                     } else {
+                         println!("DELETED (Dir): {}", display_name);
+                         stats_dirs_deleted += 1;
+                     }
+                } else {
+                    println!("MATCH (Dir): {}", display_name);
+                    stats_dirs_matched += 1;
+                }
                 continue;
             }
 
@@ -334,11 +352,14 @@ pub fn check<E: CommandExecutor>(
             
             // If we are here, it matches
             if options.force_delete {
-                 let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                 let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                 // Safety Gate: Check mtime (Seconds Precision)
+                 let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                     .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
                  
-                 // Note: Archive mtime might be older or equal.
-                 // If live is NEWER, we skip.
+                 let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                     .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+                 
+                 // If live is NEWER than archive, skip
                  if live_mtime > archive_mtime {
                       println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
                       stats_skipped += 1;
@@ -349,18 +370,21 @@ pub fn check<E: CommandExecutor>(
                       println!("ERROR: Failed to delete {}: {}", display_name, e);
                  } else {
                       println!("DELETED: {}", display_name);
-                      stats_deleted += 1;
+                      stats_files_deleted += 1;
                  }
             } else {
                  println!("MATCH: {}", display_name);
-                 stats_match += 1;
+                 stats_files_matched += 1;
             }
         }
     }
     
     println!("---------------------------------------------------");
-    println!("Files: {}, Matched: {}, Mismatched: {}, Missing: {}, Deleted: {}, Skipped: {}", 
-             manifest.files.len(), stats_match, stats_mismatch, stats_missing, stats_deleted, stats_skipped);
+    println!("Indexed Paths: {}", manifest.files.len());
+    println!("Files Matched: {}, Dirs Matched: {}", stats_files_matched, stats_dirs_matched);
+    println!("Files Deleted: {}, Dirs Deleted: {}", stats_files_deleted, stats_dirs_deleted);
+    println!("Mismatched: {}, Missing: {}, Skipped (Newer): {}", 
+             stats_mismatch, stats_missing, stats_skipped);
     
     Ok(())
 }
