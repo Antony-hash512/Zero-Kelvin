@@ -54,9 +54,20 @@ impl ZksArgs {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Freeze data into a SquashFS archive
+    #[command(
+        arg_required_else_help = true,
+        override_usage = "zks-rs freeze [OPTIONS] [TARGETS]... [ARCHIVE_PATH]",
+        about = "Offload data to a SquashFS archive (frozen state)",
+        long_about = "Offload data to a SquashFS archive (frozen state).\n\n\
+                     Arguments:\n  \
+                       TARGETS...            Files or directories to freeze.\n  \
+                       ARCHIVE_PATH          Destination .sqfs archive path.\n\n\
+                     Note: If [ARCHIVE_PATH] is a directory, the utility will prompt for a filename.\n\
+                     The last positional argument is always treated as the destination ARCHIVE_PATH."
+    )]
     Freeze {
-        /// Files or directories to include in the archive
-        #[arg(value_name = "TARGETS", num_args = 0..)]
+        /// Files/directories to freeze followed by the destination ARCHIVE_PATH
+        #[arg(value_name = "TARGETS]... [ARCHIVE_PATH", num_args = 1..)]
         args: Vec<PathBuf>,
         
         /// Encrypt the archive using LUKS
