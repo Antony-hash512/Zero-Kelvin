@@ -7,3 +7,6 @@
 /local_pkg/pkg/
 /local_pkg/*.pkg.tar.zst
 /local_pkg/*.log
+
+# Logs and histories
+conversation_history.md
