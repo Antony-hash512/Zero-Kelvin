@@ -8,7 +8,7 @@ url="https://github.com/Antony-hash512/Zero-Kelvin-Stazis"
 license=('GPL3')
 depends=('glibc' 'gcc-libs' 'squashfs-tools' 'squashfs-tools-ng' 'cryptsetup' 'squashfuse' 'rclone' 'util-linux')
 makedepends=('cargo' 'git' 'fish' 'bats' 'just') # Добавил тестовые зависимости
-provides=('zero-kelvin-stazis' 'zks-rs' 'squash_manager-rs')
+provides=('zero-kelvin-stazis' 'zks-rs' 'squash_manager-rs' 'stazis-rm-if-empty')
 conflicts=('zero-kelvin-stazis')
 
 # Абсолютный путь к корню проекта (вычисляется при парсинге PKGBUILD)
@@ -62,6 +62,7 @@ package() {
     cd "$srcdir/$pkgname"
     install -Dm755 target/release/squash_manager-rs "$pkgdir/usr/bin/squash_manager-rs"
     install -Dm755 target/release/zks-rs "$pkgdir/usr/bin/zks-rs"
+    install -Dm755 target/release/stazis-rm-if-empty "$pkgdir/usr/bin/stazis-rm-if-empty"
 
     # Установка лицензии и документации
     install -Dm644 LICENSE.GPLv3 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.GPLv3"
