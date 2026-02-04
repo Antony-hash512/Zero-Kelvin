@@ -40,7 +40,9 @@ pkg-install:
 pkg-clean:
     cd local_pkg && rm -rf pkg src *.pkg.tar.zst
 
-
+bump:
+    cargo bump patch
+    cargo check --locked || cargo update --workspace
 
 
 # Запуск всех юнит-тестов
