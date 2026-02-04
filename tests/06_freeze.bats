@@ -77,3 +77,93 @@ teardown() {
     # "Failed to get metadata" or "No targets"
     assert_output --partial "Failed"
 }
+
+# --- Phase 6.5: Comprehensive Testing ---
+
+@test "Freeze: Metadata & Manifest Verification" {
+    if ! command -v unsquashfs >/dev/null; then
+        skip "unsquashfs not found"
+    fi
+
+    OUT="$TEST_DIR/meta.sqfs"
+    run $ZKS_BIN freeze "$SRC" "$OUT"
+    assert_success
+
+    # Extract list.yaml content
+    run unsquashfs -cat "$OUT" list.yaml
+    assert_success
+    
+    # Verify Metadata
+    assert_output --partial "host:"
+    assert_output --partial "date:"
+    assert_output --partial "privilege_mode: user"
+    
+    # Verify File Entry
+    assert_output --partial "name: src"
+    # assert_output --partial "Filesystem" # Removed: unsquashfs -cat only outputs file content
+    # Actually unsquashfs -cat prints file content to stdout.
+    # The output variable will contain the file content.
+}
+
+@test "Freeze: Advanced Content (Symlinks, Empty Dirs, Special Chars)" {
+    if ! command -v unsquashfs >/dev/null; then
+        skip "unsquashfs not found"
+    fi
+    
+    ADV_SRC="$TEST_DIR/advanced"
+    mkdir -p "$ADV_SRC"
+    
+    # Symlinks
+    ln -s "target_file" "$ADV_SRC/rel_link"
+    touch "$ADV_SRC/target_file"
+    
+    # Empty Dir
+    mkdir "$ADV_SRC/empty_dir"
+    
+    # Special Chars
+    echo "space" > "$ADV_SRC/file with spaces.txt"
+    echo "emoji" > "$ADV_SRC/emoji_😀.txt"
+    
+    OUT="$TEST_DIR/advanced.sqfs"
+    run $ZKS_BIN freeze "$ADV_SRC" "$OUT"
+    assert_success
+    
+    # Verify Content Listing
+    run unsquashfs -l "$OUT"
+    assert_success
+    assert_output --partial "rel_link"
+    assert_output --partial "empty_dir"
+    assert_output --partial "file with spaces.txt"
+    assert_output --partial "emoji_😀.txt"
+}
+
+@test "Freeze: Path Resolution (Relative, Dot, Multiple)" {
+    OUT="$TEST_DIR/path_res.sqfs"
+    
+    # Relative Path input
+    pushd "$TEST_DIR"
+    run $ZKS_BIN freeze "src" "out_rel.sqfs"
+    assert_success
+    [ -f "out_rel.sqfs" ]
+    popd
+    
+    # Dot Target
+    pushd "$SRC"
+    run $ZKS_BIN freeze "$PWD" "../dot_archive.sqfs"
+    assert_success
+    [ -f "../dot_archive.sqfs" ]
+    popd
+    
+    # Multiple Targets
+    mkdir -p "$TEST_DIR/t1" "$TEST_DIR/t2"
+    touch "$TEST_DIR/t1/f1" "$TEST_DIR/t2/f2"
+    
+    run $ZKS_BIN freeze "$TEST_DIR/t1" "$TEST_DIR/t2" "$TEST_DIR/multi.sqfs"
+    assert_success
+    
+    if command -v unsquashfs >/dev/null; then
+        run unsquashfs -cat "$TEST_DIR/multi.sqfs" list.yaml
+        assert_output --partial "name: t1"
+        assert_output --partial "name: t2"
+    fi
+}
