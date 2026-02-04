@@ -136,7 +136,7 @@
 - [ ] **Безопасное удаление (`--force-delete`):**
     - [ ] Реализация **Safety Gate**: автоматический пропуск удаления, если файл в системе имеет более свежую дату изменения (`mtime`), чем в архиве.
     - [ ] Удаление локальных копий только при 100% подтвержденном совпадении данных (при сочетании `--force-delete` и `--use-cmp`).
-    - [ ] При использовании `--force-delete` без `--use-cmp` используем только механизм Safety Gate и пишем пользователю предупреждение на английском: "Warning: original files will be deleted based on size and modification date. For byte-by-byte verification, add --use-cmp.".
+    - [ ] При использовании `--force-delete` без `--use-cmp` используем только механизм Safety Gate и пишем пользователю предупреждение на английском: "Warning: Files will be deleted based on size and mtime. For byte-by-byte verification combine --use-cmp with --force-delete (note: this is much slower)".
 - [ ] **Отчетность и UI:**
     - [ ] Реализация структурированного выводаStatuses (MATCH, MISMATCH, MISSING, META_DIFF).
     - [ ] Итоговая статистика по количеству проверенных и измененных объектов.
