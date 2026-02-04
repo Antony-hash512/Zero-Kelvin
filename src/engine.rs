@@ -183,6 +183,213 @@ pub struct UnfreezeOptions {
     pub skip_existing: bool,
 }
 
+pub struct CheckOptions {
+    pub use_cmp: bool,
+    pub force_delete: bool,
+}
+
+pub fn check<E: CommandExecutor>(
+    archive_path: &Path,
+    options: &CheckOptions,
+    executor: &E,
+) -> Result<()> {
+    // 1. Mount Archive
+    let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
+    let mount_point = mount_dir.path();
+    
+    let status = executor.run_interactive("squash_manager-rs", &[
+        "mount",
+        archive_path.to_str().unwrap(),
+        mount_point.to_str().unwrap()
+    ])?;
+    
+    if !status.success() {
+        return Err(anyhow!("Failed to mount archive"));
+    }
+    
+    // Ensure unmount
+    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
+    impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
+        fn drop(&mut self) {
+             let _ = self.0.run("squash_manager-rs", &["umount", self.1.to_str().unwrap()]);
+        }
+    }
+    let _guard = UnmountGuard(executor, mount_point);
+    
+    // 2. Read Manifest
+    let manifest_path = mount_point.join("list.yaml");
+    if !manifest_path.exists() {
+        return Err(anyhow!("Archive missing list.yaml - invalid format"));
+    }
+    let f = fs::File::open(&manifest_path)?;
+    let manifest: Manifest = serde_yaml::from_reader(f)?;
+    manifest.validate()?;
+    
+    // 3. Perform Check
+    println!("Checking {} files from archive...", manifest.files.len());
+    
+    let mut stats_match = 0;
+    let mut stats_mismatch = 0;
+    let mut stats_missing = 0;
+    let mut stats_skipped = 0;
+    let mut stats_deleted = 0;
+
+    for entry in &manifest.files {
+        // ... (Path resolution logic is same)
+        let live_root = if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
+             PathBuf::from(parent).join(name)
+        } else if let Some(orig) = &entry.original_path {
+             PathBuf::from(orig)
+        } else {
+             println!("SKIPPED (Invalid Entry {}): Missing path info", entry.id);
+             continue;
+        };
+
+        // Construct source path in mount
+        let entry_name_in_mount = entry.name.as_deref()
+            .or(live_root.file_name().and_then(|n| n.to_str()))
+            .unwrap_or("unknown");
+            
+        let mount_root = mount_point
+            .join("to_restore")
+            .join(entry.id.to_string())
+            .join(entry_name_in_mount);
+
+        // Recursive walker
+        // We walk the MOUNT point because that is the reference state.
+        // We want to ensure every file in archive exists and matches in live.
+        
+        if !mount_root.exists() {
+             println!("ERROR: Archive corrupted, missing internal root for id {}", entry.id);
+             continue;
+        }
+
+        let walker = walkdir::WalkDir::new(&mount_root);
+        
+        for item in walker.into_iter().filter_map(|e| e.ok()) {
+            let mount_path = item.path();
+            
+            // Calculate relative path from mount_root
+            let rel_path = match mount_path.strip_prefix(&mount_root) {
+                Ok(p) => p,
+                Err(_) => continue, // Should not happen
+            };
+            
+            let live_path = live_root.join(rel_path);
+            let display_name = live_path.display().to_string();
+
+            // Perform Check for this specific item
+            if !live_path.exists() {
+                println!("MISSING: {}", display_name);
+                stats_missing += 1;
+                continue;
+            }
+
+            let live_meta = match fs::symlink_metadata(&live_path) {
+                Ok(m) => m,
+                Err(_) => {
+                    println!("ERROR: Failed to read metadata for {}", display_name);
+                    continue;
+                }
+            };
+            
+            let mount_meta = match fs::symlink_metadata(mount_path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            // Check Type
+            if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
+               live_meta.file_type().is_file() != mount_meta.file_type().is_file() { // Ignore symlinks details for now?
+                println!("MISMATCH (Type): {}", display_name);
+                stats_mismatch += 1;
+                continue;
+            }
+            
+            if live_meta.is_dir() {
+                println!("MATCH (Dir): {}", display_name);
+                stats_match += 1;
+                continue;
+            }
+
+            // Check Size
+            if live_meta.len() != mount_meta.len() {
+                 println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
+                 stats_mismatch += 1;
+                 continue;
+            }
+            
+            // Deep Check
+            if options.use_cmp {
+                // If it's a file
+                 if live_meta.is_file() {
+                    let matches = compare_files(&live_path, mount_path).unwrap_or(false);
+                    if !matches {
+                         println!("MISMATCH (Content): {}", display_name);
+                         stats_mismatch += 1;
+                         continue;
+                    }
+                 }
+            }
+            
+            // If we are here, it matches
+            if options.force_delete {
+                 let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                 let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                 
+                 // Note: Archive mtime might be older or equal.
+                 // If live is NEWER, we skip.
+                 if live_mtime > archive_mtime {
+                      println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
+                      stats_skipped += 1;
+                      continue;
+                 }
+                 
+                 if let Err(e) = fs::remove_file(&live_path) {
+                      println!("ERROR: Failed to delete {}: {}", display_name, e);
+                 } else {
+                      println!("DELETED: {}", display_name);
+                      stats_deleted += 1;
+                 }
+            } else {
+                 println!("MATCH: {}", display_name);
+                 stats_match += 1;
+            }
+        }
+    }
+    
+    println!("---------------------------------------------------");
+    println!("Files: {}, Matched: {}, Mismatched: {}, Missing: {}, Deleted: {}, Skipped: {}", 
+             manifest.files.len(), stats_match, stats_mismatch, stats_missing, stats_deleted, stats_skipped);
+    
+    Ok(())
+}
+
+fn compare_files(p1: &Path, p2: &Path) -> Result<bool> {
+    use std::io::Read;
+    let f1 = fs::File::open(p1)?;
+    let f2 = fs::File::open(p2)?;
+    
+    // Use BufReader logic
+    let mut b1 = std::io::BufReader::new(f1);
+    let mut b2 = std::io::BufReader::new(f2);
+    
+    let mut buf1 = [0; 8192];
+    let mut buf2 = [0; 8192];
+    
+    loop {
+        let n1 = b1.read(&mut buf1)?;
+        let n2 = b2.read(&mut buf2)?;
+        
+        if n1 != n2 { return Ok(false); }
+        if n1 == 0 { return Ok(true); } // EOF reached for both
+        
+        if buf1[..n1] != buf2[..n2] {
+            return Ok(false);
+        }
+    }
+}
+
 pub fn unfreeze<E: CommandExecutor>(
     archive_path: &Path,
     options: &UnfreezeOptions,
