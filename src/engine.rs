@@ -174,6 +174,7 @@ pub struct FreezeOptions {
     pub overwrite_files: bool,
     pub overwrite_luks_content: bool,
     pub progress_mode: ProgressMode,
+    pub compression: Option<u32>,
 }
 
 pub fn freeze<E: CommandExecutor>(
@@ -279,6 +280,9 @@ fn generate_freeze_script(
     if options.overwrite_luks_content {
         flags.push_str(" --overwrite-luks-content");
     }
+    if let Some(level) = options.compression {
+        flags.push_str(&format!(" --compression {}", level));
+    }
 
     // IMPORTANT: Point squash_manager to the PAYLOAD directory, not the build root
     let input_dir = build_dir.join("payload");
@@ -379,6 +383,7 @@ mod tests {
             overwrite_files: false,
             overwrite_luks_content: false,
             progress_mode: ProgressMode::None,
+            compression: None,
         };
         
         let script = generate_freeze_script(&manifest, &build_dir, &options).unwrap();

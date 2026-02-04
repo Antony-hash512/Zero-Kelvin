@@ -34,6 +34,7 @@ impl ZksArgs {
     Options:
       -e, --encrypt         Encrypt the archive using LUKS (via squash_manager).
       -r, --read <FILE>     Read list of targets from a file.
+      -c, --compression N   Zstd compression level (default: {1}).
 
   unfreeze <ARCHIVE_PATH>
     Restore data from a frozen archive to its original locations.
@@ -47,7 +48,7 @@ impl ZksArgs {
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
       --force-delete        Delete local files if they match the archive (Destructive!).
-", BANNER))
+", BANNER, DEFAULT_ZSTD_COMPRESSION))
     }
 }
 
@@ -98,6 +99,10 @@ pub enum Commands {
         /// Use experimental Alfa progress bar
         #[arg(long, group = "progress")]
         alfa_progress: bool,
+
+        /// Zstd compression level (0 = none, default: see help)
+        #[arg(short = 'c', long, value_name = "LEVEL")]
+        compression: Option<u32>,
     },
     /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
@@ -123,6 +128,7 @@ pub enum Commands {
 
 use anyhow::{Result, anyhow, Context};
 use zero_kelvin_stazis::engine::{self, FreezeOptions};
+use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::RealSystem;
 use std::fs;
 
@@ -186,6 +192,7 @@ fn main() -> Result<()> {
             no_progress,
             vanilla_progress: _vanilla_progress,
             alfa_progress,
+            compression,
         } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
             let executor = RealSystem;
@@ -205,6 +212,7 @@ fn main() -> Result<()> {
                 overwrite_files,
                 overwrite_luks_content,
                 progress_mode,
+                compression,
             };
             
             // Log info
@@ -280,9 +288,11 @@ mod tests {
             "freeze",
             "/home/user/data",
             "/mnt/backup/data.sqfs",
+            "/mnt/backup/data.sqfs",
             "-e",
             "--read",
             "/tmp/list.txt",
+            "-c", "19",
         ]);
 
         match args.command {
@@ -295,6 +305,7 @@ mod tests {
                 no_progress,
                 vanilla_progress,
                 alfa_progress,
+                compression,
             } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
@@ -305,6 +316,7 @@ mod tests {
                 assert!(!no_progress); // not passed
                 assert!(!vanilla_progress); // not passed
                 assert!(!alfa_progress); // not passed
+                assert_eq!(compression, Some(19));
             }
             _ => panic!("Expected Freeze command"),
         }
@@ -316,10 +328,11 @@ mod tests {
         let args = ZksArgs::parse_from(&[
             "zks", "freeze", "target", "out.sqfs", "--vanilla-progress"
         ]);
-        if let Commands::Freeze { vanilla_progress, no_progress, alfa_progress, .. } = args.command {
+        if let Commands::Freeze { vanilla_progress, no_progress, alfa_progress, compression, .. } = args.command {
             assert!(vanilla_progress);
             assert!(!no_progress);
             assert!(!alfa_progress);
+            assert_eq!(compression, None);
         } else { panic!("Wrong command"); }
 
         // Test no-progress
