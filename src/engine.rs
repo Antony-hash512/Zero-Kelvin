@@ -161,11 +161,19 @@ fn get_hostname() -> Result<String> {
         .map(|s| s.trim().to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProgressMode {
+    None,
+    Vanilla, // Standard mksquashfs bar
+    Alfa,    // Placeholder for future advanced bar
+}
+
 pub struct FreezeOptions {
     pub encrypt: bool,
     pub output: PathBuf,
     pub overwrite_files: bool,
     pub overwrite_luks_content: bool,
+    pub progress_mode: ProgressMode,
 }
 
 pub fn freeze<E: CommandExecutor>(
@@ -174,7 +182,7 @@ pub fn freeze<E: CommandExecutor>(
     executor: &E,
 ) -> Result<()> {
     // 0. Auto-GC: Cleanup stale build directories (protected by flock)
-    if let Err(e) = try_gc_staging() {
+    if let Err(_e) = try_gc_staging() {
         // Log but don't fail, maybe just debug print if we had logging
         // eprintln!("GC Warning: {}", e); 
     }
@@ -274,10 +282,18 @@ fn generate_freeze_script(
 
     // IMPORTANT: Point squash_manager to the PAYLOAD directory, not the build root
     let input_dir = build_dir.join("payload");
+
+    let progress_flag = match options.progress_mode {
+        ProgressMode::None => "--no-progress",
+        ProgressMode::Vanilla => "--vanilla-progress",
+        ProgressMode::Alfa => "--alfa-progress",
+    };
+
     script.push_str(&format!(
-        "squash_manager-rs create {} {} --no-progress \"{}\" \"{}\"\n",
+        "squash_manager-rs create {} {} {} \"{}\" \"{}\"\n",
         encrypt_flag,
         flags,
+        progress_flag,
         input_dir.display(),
         options.output.display()
     ));
@@ -362,6 +378,7 @@ mod tests {
             output: output.clone(),
             overwrite_files: false,
             overwrite_luks_content: false,
+            progress_mode: ProgressMode::None,
         };
         
         let script = generate_freeze_script(&manifest, &build_dir, &options).unwrap();

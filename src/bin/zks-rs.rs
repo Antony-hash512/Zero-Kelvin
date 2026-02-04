@@ -83,8 +83,21 @@ pub enum Commands {
         overwrite_files: bool,
 
         /// Replace ENTIRE content of LUKS container (Requires LUKS output)
+        /// Replace ENTIRE content of LUKS container (Requires LUKS output)
         #[arg(long)]
         overwrite_luks_content: bool,
+
+        /// Disable progress bar
+        #[arg(long, group = "progress")]
+        no_progress: bool,
+
+        /// Use standard mksquashfs progress bar (Default behavior)
+        #[arg(long, group = "progress")]
+        vanilla_progress: bool,
+
+        /// Use experimental Alfa progress bar
+        #[arg(long, group = "progress")]
+        alfa_progress: bool,
     },
     /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
@@ -164,14 +177,34 @@ fn main() -> Result<()> {
         .unwrap();
 
     match args.command {
-        Commands::Freeze { args, encrypt, read, overwrite_files, overwrite_luks_content } => {
+        Commands::Freeze { 
+            args, 
+            encrypt, 
+            read, 
+            overwrite_files, 
+            overwrite_luks_content,
+            no_progress,
+            vanilla_progress: _vanilla_progress,
+            alfa_progress,
+        } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
             let executor = RealSystem;
+
+            let progress_mode = if no_progress {
+                engine::ProgressMode::None
+            } else if alfa_progress {
+                engine::ProgressMode::Alfa
+            } else {
+                // Default is Vanilla (even if vanilla_progress is false but others are false too)
+                engine::ProgressMode::Vanilla
+            };
+
             let options = FreezeOptions { 
                 encrypt, 
                 output,
                 overwrite_files,
                 overwrite_luks_content,
+                progress_mode,
             };
             
             // Log info
@@ -259,6 +292,9 @@ mod tests {
                 read,
                 overwrite_files,
                 overwrite_luks_content,
+                no_progress,
+                vanilla_progress,
+                alfa_progress,
             } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
@@ -266,9 +302,34 @@ mod tests {
                 assert_eq!(read, Some(PathBuf::from("/tmp/list.txt")));
                 assert!(!overwrite_files);
                 assert!(!overwrite_luks_content);
+                assert!(!no_progress); // not passed
+                assert!(!vanilla_progress); // not passed
+                assert!(!alfa_progress); // not passed
             }
             _ => panic!("Expected Freeze command"),
         }
+    }
+
+    #[test]
+    fn test_parse_freeze_progress_flags() {
+        // Test vanilla-progress
+        let args = ZksArgs::parse_from(&[
+            "zks", "freeze", "target", "out.sqfs", "--vanilla-progress"
+        ]);
+        if let Commands::Freeze { vanilla_progress, no_progress, alfa_progress, .. } = args.command {
+            assert!(vanilla_progress);
+            assert!(!no_progress);
+            assert!(!alfa_progress);
+        } else { panic!("Wrong command"); }
+
+        // Test no-progress
+        let args = ZksArgs::parse_from(&[
+            "zks", "freeze", "target", "out.sqfs", "--no-progress"
+        ]);
+        if let Commands::Freeze { vanilla_progress, no_progress, .. } = args.command {
+            assert!(no_progress);
+            assert!(!vanilla_progress);
+        } else { panic!("Wrong command"); }
     }
 
     #[test]
