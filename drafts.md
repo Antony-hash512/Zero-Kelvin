@@ -80,3 +80,40 @@ chmod +x .git/hooks/pre-commit
 Команда `git add -u` закинет в коммит **ВСЕ** изменения в отслеживаемых файлах (потому что `cargo fmt` перезаписывает файлы целиком).
 
 **Если ты всегда коммитишь файлы целиком (`git add .`), то этот метод для тебя идеален.**
+
+## Тесты
+
+### Надо сделать:
+#### A. Metadata & Manifest Verification
+Manifest Content: Unpack the created archive and verify list.yaml exists and contains correct paths/IDs.
+Hostname/Date: Check that list.yaml contains the correct hostname and a valid date format.
+Privilege Mode: Verify that 
+privilege_mode
+ is correctly set to 
+user
+ when running without root.
+#### B. Advanced File Types & Attributes
+Symlinks: Create an archive containing relative and absolute symlinks. Verify they are restored correctly (or at least preserved in the archive).
+Empty Directories: Ensure empty directories are preserved in the archive (important for project structures).
+Special Characters: Test filenames with spaces, quotes, emojis, and newlines to ensure the list.yaml and script generation handle escaping correctly.
+#### F. Complex Path Resolution
+Relative Paths: Run zks freeze ../src ./out.sqfs (relative inputs/outputs).
+Dot Targets: Run zks freeze . out.sqfs.
+Multiple Targets: Run zks freeze dir1 dir2 file3 out.sqfs and verify all are inside.
+
+
+
+### Требует рут, проверим потом:
+#### C. Encryption (LUKS)
+Encrypt Flag: Run zks freeze -e ... and verify the output is a LUKS container (using cryptsetup isLuks).
+Password Prompt: This is hard to test non-interactively without a sophisticated expect script or a mock for the password reader, but rudimentary checks can be done (e.g., pipe password if supported).
+#### D. User Namespace & Permissions (The "Rootless" Promise)
+Unreadable Files (User Mode): what happens if a regular user tries to freeze a file they can't read? (Should fail or skip with warning).
+Owner Preservation:
+Root Mode: If running as root (or sudo), create files with different UIDs. Freeze and Unfreeze. Verify UIDs are preserved.
+User Mode: Verify all files are owned by the current user in the archive (squashfs typically maps this unless configured otherwise).
+
+### Надо сделать, когда будем реализовывать очистку
+#### E. Staging Area Cleanup
+Cleanup Success: Verify that the temporary build directory in $XDG_CACHE_HOME/zero-kelvin-stazis/build_* is removed after a successful freeze.
+Cleanup Failure: Verify that if mksquashfs fails (e.g., disk full mock), the staging directory is still cleaned up (or preserved for debugging if that's the policy).
