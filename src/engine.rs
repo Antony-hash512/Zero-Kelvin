@@ -297,7 +297,6 @@ mod tests {
         assert!(script.contains("--no-progress"));
     }
     
-    use crate::executor::MockCommandExecutor;
     
     #[test]
     fn test_freeze_execution_flow() {

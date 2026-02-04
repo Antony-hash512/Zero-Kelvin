@@ -189,16 +189,17 @@ impl CompressionMode {
         }
     }
 
-    fn apply_to_mksquashfs<'a>(&self, args: &mut Vec<&'a str>, temp_level: &'a str) {
+
+    fn apply_to_mksquashfs(&self, args: &mut Vec<String>) {
         match self {
             Self::None => {
-                args.push("-no-compression");
+                args.push("-no-compression".to_string());
             }
-            Self::Zstd(_) => {
-                args.push("-comp");
-                args.push("zstd");
-                args.push("-Xcompression-level");
-                args.push(temp_level);
+            Self::Zstd(level) => {
+                args.push("-comp".to_string());
+                args.push("zstd".to_string());
+                args.push("-Xcompression-level".to_string());
+                args.push(level.to_string());
             }
         }
     }
@@ -1092,17 +1093,9 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     }
                     // Else if existing (and we are here, meaning overwrite_files is true), we omit -noappend (default is append).
 
+                    
                     // Compression
-                    let comp_level_str = compression.to_string();
-                    match comp_mode {
-                        CompressionMode::None => mksquashfs_args.push("-no-compression".to_string()),
-                        CompressionMode::Zstd(_) => {
-                             mksquashfs_args.push("-comp".to_string());
-                             mksquashfs_args.push("zstd".to_string());
-                             mksquashfs_args.push("-Xcompression-level".to_string());
-                             mksquashfs_args.push(comp_level_str.clone());
-                        },
-                    }
+                    comp_mode.apply_to_mksquashfs(&mut mksquashfs_args);
                     
                     // Convert back to Vec<&str> for execution args
                     // This is a bit clumsy but safer given we modified Vec<String>
@@ -1776,7 +1769,7 @@ mod tests {
         // 8. Transaction Drop Sequence
         // 8.1 Sync
         mock.expect_run()
-            .withf(|program, args| program == "sync")
+            .withf(|program, _args| program == "sync")
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -1902,8 +1895,7 @@ mod tests {
         assert_eq!(mode_none, CompressionMode::None);
         
         let mut args = vec![];
-        let dummy_level = "0";
-        mode_none.apply_to_mksquashfs(&mut args, dummy_level);
+        mode_none.apply_to_mksquashfs(&mut args);
         assert_eq!(args, vec!["-no-compression"]);
 
         assert!(mode_none.get_tar2sqfs_compressor_flag().is_err());
@@ -1913,10 +1905,8 @@ mod tests {
         assert_eq!(mode_zstd, CompressionMode::Zstd(15));
         
         let mut args2 = vec![];
-        let level_str = "15";
-        mode_zstd.apply_to_mksquashfs(&mut args2, level_str);
+        mode_zstd.apply_to_mksquashfs(&mut args2);
         assert_eq!(args2, vec!["-comp", "zstd", "-Xcompression-level", "15"]);
-
         assert_eq!(mode_zstd.get_tar2sqfs_compressor_flag().unwrap(), "-c zstd");
     }
 
