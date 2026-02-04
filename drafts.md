@@ -117,3 +117,48 @@ User Mode: Verify all files are owned by the current user in the archive (squash
 #### E. Staging Area Cleanup
 Cleanup Success: Verify that the temporary build directory in $XDG_CACHE_HOME/zero-kelvin-stazis/build_* is removed after a successful freeze.
 Cleanup Failure: Verify that if mksquashfs fails (e.g., disk full mock), the staging directory is still cleaned up (or preserved for debugging if that's the policy).
+
+## Предварительный план логгирования
+
+Implementation Plan: Logging & Observability
+Goal Description
+Implement a professional logging system to track application state, command execution, and errors.
+
+Humans: High-level status in the terminal (pretty/colored).
+Audit/Debug: Detailed logs in a persistent file with automatic rotation.
+User Review Required
+IMPORTANT
+
+Logs will be stored in ~/.local/state/zero-kelvin-stazis/logs/ by default (following XDG specs).
+
+Proposed Changes
+[MODIFY] 
+Cargo.toml
+Add dependencies:
+
+tracing
+tracing-subscriber (with env-filter)
+tracing-appender (for rotation)
+[NEW] 
+src/logger.rs
+Create init_logger():
+
+Configure tracing_appender::rolling::daily or hourly.
+Set up a tracing_subscriber with two layers:
+Format Layer: Writes "Pretty" output to stderr.
+File Layer: Writes JSON or detailed text to the rotating log file.
+[MODIFY] 
+src/bin/zks-rs.rs
+ / 
+src/bin/squash_manager-rs.rs
+Call logger::init_logger()? at the very start of 
+main()
+.
+[MODIFY] 
+src/engine.rs
+Replace eprintln! warnings with warn! or error! macros.
+
+Verification Plan
+Automated Tests
+Create a test that initializes the logger in a temp directory and verifies the log file existence after some logging calls.
+Verify that terminal output remains "clean" but log files contain DEBUG level info.
