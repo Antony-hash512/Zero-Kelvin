@@ -34,6 +34,7 @@ pkg:
 pkg-install:
     cargo bump patch
     cargo check --locked || cargo update --workspace
+    just pkg-clean
     cd local_pkg && makepkg -fsi
 
 # Очистка артефактов сборки пакета
