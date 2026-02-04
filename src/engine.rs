@@ -154,6 +154,12 @@ pub fn freeze<E: CommandExecutor>(
          return Err(anyhow!("Freeze process failed (unshare/squash_manager returned non-zero exit code)"));
     }
     
+    // Cleanup Staging Area
+    if let Err(e) = std::fs::remove_dir_all(&build_dir) {
+        // Use eprintln for now as we don't have a logger setup
+        eprintln!("Warning: Failed to clean up staging directory {:?}: {}", build_dir, e);
+    }
+    
     Ok(())
 }
 

@@ -12,14 +12,17 @@ setup() {
     if [ -z "$ZKS_BIN" ]; then
         if [ -f "./target/debug/zks-rs" ]; then
             export ZKS_BIN="./target/debug/zks-rs"
-             export RM_BIN="./target/debug/stazis-rm-if-empty"
         elif [ -f "../target/debug/zks-rs" ]; then
             export ZKS_BIN="../target/debug/zks-rs"
-            export RM_BIN="../target/debug/stazis-rm-if-empty"
         else
             export ZKS_BIN="$(git rev-parse --show-toplevel)/target/debug/zks-rs"
-            export RM_BIN="$(git rev-parse --show-toplevel)/target/debug/stazis-rm-if-empty"
         fi
+    fi
+
+    # Derive RM_BIN from ZKS_BIN location if not set
+    if [ -z "$RM_BIN" ]; then
+        BIN_DIR=$(dirname "$ZKS_BIN")
+        export RM_BIN="$BIN_DIR/stazis-rm-if-empty"
     fi
     
     # Add directory of ZKS_BIN to PATH for squash_manager-rs
@@ -86,12 +89,12 @@ teardown() {
     assert [ ! -d "$EMPTY_DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty PRESERVES non-empty file" {
+@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES non-empty file" {
     NON_EMPTY="$TEST_DIR/data.txt"
     echo "data" > "$NON_EMPTY"
     
     run "$RM_BIN" "$NON_EMPTY"
-    assert_success 
+    assert_failure
     # Logic might differ: does it return error or success if not removed?
     # Assuming success but no action if not empty.
     # Let's verify file exists.
@@ -108,15 +111,16 @@ teardown() {
     assert [ ! -d "$DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty PRESERVES directory with non-empty file" {
+@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES directory with non-empty file" {
     DIR="$TEST_DIR/dir_data"
     mkdir "$DIR"
     echo "content" > "$DIR/file"
     
     run "$RM_BIN" "$DIR"
-    assert_success
+    assert_failure
     assert [ -d "$DIR" ]
     assert [ -f "$DIR/file" ]
+    assert_output --partial "non-empty"
 }
 
 @test "Cleanup: stazis-rm-if-empty REMOVES recursive (empty dir + empty file)" {
@@ -129,14 +133,16 @@ teardown() {
     assert [ ! -d "$DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty PRESERVES recursive (empty dir + non-empty file)" {
+@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES recursive (atomic check)" {
     DIR="$TEST_DIR/dir_recursive_data"
     mkdir -p "$DIR/subdir"
     echo "content" > "$DIR/file"
     
     run "$RM_BIN" "$DIR"
-    assert_success
+    assert_failure
     assert [ -d "$DIR" ]
-    assert [ -d "$DIR/subdir" ]
+    # Atomic check: empty subdir must ALSO be preserved because operation aborted
+    assert [ -d "$DIR/subdir" ] 
     assert [ -f "$DIR/file" ]
+    assert_output --partial "non-empty"
 }

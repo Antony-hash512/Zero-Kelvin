@@ -111,3 +111,5 @@ and run_colored_bats tests/04_unpack.bats
 and run_colored_bats tests/05_luks.bats
 
 and run_colored_bats tests/06_freeze.bats
+
+and run_colored_bats tests/07_cleaning.bats
