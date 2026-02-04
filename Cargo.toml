@@ -1,6 +1,6 @@
 [package]
 name = "zero-kelvin-stazis"
-version = "0.1.27"
+version = "0.1.28"
 edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
@@ -64,6 +64,7 @@ env_logger = "0.11"
 
 # 8. Генерация случайных чисел (для разных целей)
 rand = "0.9"
+fs2 = "0.4.3"
 
 [dev-dependencies]
 # Инструменты для ТЕСТОВ

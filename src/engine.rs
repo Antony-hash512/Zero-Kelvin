@@ -4,12 +4,13 @@ use crate::executor::CommandExecutor;
 use crate::manifest::{Manifest, Metadata, FileEntry, PrivilegeMode};
 use crate::utils;
 use std::fs;
+use fs2::FileExt; // For flock
 // rand is in Cargo.toml
 
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
-/// Returns the path to the staging directory.
-pub fn prepare_staging(targets: &[PathBuf]) -> Result<PathBuf> {
+/// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
+pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> {
     // 1. Resolve XDG_CACHE_HOME
     let cache_root = get_cache_dir()?;
     let app_cache = cache_root.join("zero-kelvin-stazis");
@@ -23,6 +24,12 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<PathBuf> {
     let build_dir = app_cache.join(build_dir_name);
     
     fs::create_dir_all(&build_dir).context("Failed to create build directory")?;
+
+    // 2.1 Create and Lock .lock file
+    // This lock safeguards against GC while this process is alive.
+    let lock_path = build_dir.join(".lock");
+    let lock_file = fs::File::create(&lock_path).context("Failed to create .lock file")?;
+    lock_file.lock_exclusive().context("Failed to acquire exclusive lock on staging directory")?;
 
     // 2.5 Create 'payload' directory
     let payload_dir = build_dir.join("payload");
@@ -78,7 +85,61 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<PathBuf> {
     let f = fs::File::create(&manifest_path)?;
     serde_yaml::to_writer(f, &manifest)?;
     
-    Ok(build_dir)
+    Ok((build_dir, lock_file))
+}
+
+/// Tries to garbage collect old staging directories.
+/// Iterates over subdirectories in the cache. Tries to acquire non-blocking exclusive lock on .lock.
+/// If successful, it means the process is dead, so we delete the directory.
+pub fn try_gc_staging() -> Result<()> {
+    let cache_root = get_cache_dir()?;
+    let app_cache = cache_root.join("zero-kelvin-stazis");
+
+    if !app_cache.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(app_cache)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with("build_") {
+                    let lock_path = path.join(".lock");
+                    if lock_path.exists() {
+                        if let Ok(lock_file) = fs::File::open(&lock_path) {
+                            // Try LOCK_NB (Non-Blocking). 
+                            // If lock_exclusive succeeds, it means no one else holds it.
+                            if lock_file.try_lock_exclusive().is_ok() {
+                                // Safe to delete
+                                // We hold the lock now, so no one else can claim it.
+                                // We can delete the directory.
+                                // Note: remove_dir_all might fail on .lock file on Windows because we hold open handle, 
+                                // but on Linux unlink usually works on open files. 
+                                // To be safe, we can drop lock_file before delete? 
+                                // NO, if we drop, someone else might claim it (race).
+                                // But since we are deleting, new processes create NEW directories with new names, 
+                                // they don't reuse old build_ dirs. So race is only with other GCs.
+                                // If we hold lock, other GCs fail try_lock.
+                                // So we are safe.
+                                if let Err(e) = fs::remove_dir_all(&path) {
+                                    eprintln!("GC: Failed to remove {:?}: {}", path, e);
+                                } else {
+                                    // println!("GC: Removed staged dir {:?}", path);
+                                }
+                            }
+                        }
+                    } else {
+                        // No .lock file? Maybe created before locking logic or broken.
+                        // Can we safely delete? 
+                        // Let's rely on checking age or just skip for now to be safe.
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn get_cache_dir() -> Result<PathBuf> {
@@ -112,8 +173,15 @@ pub fn freeze<E: CommandExecutor>(
     options: &FreezeOptions,
     executor: &E,
 ) -> Result<()> {
+    // 0. Auto-GC: Cleanup stale build directories (protected by flock)
+    if let Err(e) = try_gc_staging() {
+        // Log but don't fail, maybe just debug print if we had logging
+        // eprintln!("GC Warning: {}", e); 
+    }
+
     // 1. Prepare Staging
-    let build_dir = prepare_staging(targets)?;
+    // _lock must be kept in scope to maintain the flock until we are done (or until cleanup)
+    let (build_dir, _lock) = prepare_staging(targets)?;
     
     // 2. Read Manifest (re-read to get file list with correct stub paths if needed? 
     // No, prepare_staging returned build_dir, manifest is at build_dir/payload/list.yaml.
@@ -246,7 +314,7 @@ mod tests {
         
         let targets = vec![file_target.clone(), dir_target.clone()];
         
-        let build_dir = prepare_staging(&targets).unwrap();
+        let (build_dir, _lock) = prepare_staging(&targets).unwrap();
         
         assert!(build_dir.exists());
         let payload_dir = build_dir.join("payload");
