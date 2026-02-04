@@ -40,6 +40,7 @@ pkg-install:
 pkg-clean:
     cd local_pkg && rm -rf pkg src *.pkg.tar.zst
 
+# Обновление версии и проверка зависимостей без сборки пакета
 bump:
     cargo bump patch
     cargo check --locked || cargo update --workspace
