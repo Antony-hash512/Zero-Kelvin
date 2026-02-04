@@ -23,9 +23,13 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<PathBuf> {
     let build_dir = app_cache.join(build_dir_name);
     
     fs::create_dir_all(&build_dir).context("Failed to create build directory")?;
+
+    // 2.5 Create 'payload' directory
+    let payload_dir = build_dir.join("payload");
+    fs::create_dir(&payload_dir).context("Failed to create payload directory")?;
     
-    // 3. Create 'to_restore' directory
-    let restore_root = build_dir.join("to_restore");
+    // 3. Create 'to_restore' directory INSIDE payload
+    let restore_root = payload_dir.join("to_restore");
     fs::create_dir(&restore_root).context("Failed to create to_restore directory")?;
     
     // 4. Generate Files list and create stubs
@@ -69,8 +73,8 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<PathBuf> {
     let metadata = Metadata::new(hostname, mode);
     let manifest = Manifest::new(metadata, file_entries);
     
-    // 6. Write list.yaml
-    let manifest_path = build_dir.join("list.yaml");
+    // 6. Write list.yaml INSIDE payload
+    let manifest_path = payload_dir.join("list.yaml");
     let f = fs::File::create(&manifest_path)?;
     serde_yaml::to_writer(f, &manifest)?;
     
@@ -99,6 +103,8 @@ fn get_hostname() -> Result<String> {
 pub struct FreezeOptions {
     pub encrypt: bool,
     pub output: PathBuf,
+    pub overwrite_files: bool,
+    pub overwrite_luks_content: bool,
 }
 
 pub fn freeze<E: CommandExecutor>(
@@ -110,16 +116,17 @@ pub fn freeze<E: CommandExecutor>(
     let build_dir = prepare_staging(targets)?;
     
     // 2. Read Manifest (re-read to get file list with correct stub paths if needed? 
-    // No, prepare_staging returned build_dir, manifest is at build_dir/list.yaml.
+    // No, prepare_staging returned build_dir, manifest is at build_dir/payload/list.yaml.
     // We need manifest to generate bind mounts.
     // Optimization: prepare_staging could return Manifest too?
     // Or we read it back. Reading back ensures consistency.
-    let manifest_path = build_dir.join("list.yaml");
+    let payload_dir = build_dir.join("payload");
+    let manifest_path = payload_dir.join("list.yaml");
     let f = fs::File::open(&manifest_path)?;
     let manifest: Manifest = serde_yaml::from_reader(f)?;
     
     // 3. Generate internal script
-    let script = generate_freeze_script(&manifest, &build_dir, &options.output, options.encrypt)?;
+    let script = generate_freeze_script(&manifest, &build_dir, options)?;
     let script_path = build_dir.join("freeze.sh");
     fs::write(&script_path, &script)?;
     
@@ -141,7 +148,11 @@ pub fn freeze<E: CommandExecutor>(
         "sh", script_path.to_str().unwrap()
     ];
     
-    executor.run_interactive("unshare", &args)?;
+    let status = executor.run_interactive("unshare", &args)?;
+    
+    if !status.success() {
+         return Err(anyhow!("Freeze process failed (unshare/squash_manager returned non-zero exit code)"));
+    }
     
     Ok(())
 }
@@ -149,8 +160,7 @@ pub fn freeze<E: CommandExecutor>(
 fn generate_freeze_script(
     manifest: &Manifest,
     build_dir: &Path,
-    output: &Path,
-    encrypt: bool
+    options: &FreezeOptions,
 ) -> Result<String> {
     let mut script = String::new();
     script.push_str("#!/bin/sh\n");
@@ -162,7 +172,7 @@ fn generate_freeze_script(
         // Wait, restore_path is parent dir. So full path is restore_path/name.
         if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
              let src = Path::new(parent).join(name);
-             let dest = build_dir.join("to_restore").join(entry.id.to_string()).join(name);
+             let dest = build_dir.join("payload").join("to_restore").join(entry.id.to_string()).join(name);
              
              // Escape paths? Ideally use safe quoting. 
              // Using debug format {:?} adds quotes but might not be sh-safe.
@@ -178,12 +188,24 @@ fn generate_freeze_script(
     // If it's a sibling binary, we might need to resolve it?
     // Legacy assumed in PATH or resolved via functions.
     // We'll assume PATH for now.
-    let encrypt_flag = if encrypt { "--encrypt" } else { "" };
+    let encrypt_flag = if options.encrypt { "--encrypt" } else { "" };
+    
+    let mut flags = String::new();
+    if options.overwrite_files {
+        flags.push_str(" --overwrite-files");
+    }
+    if options.overwrite_luks_content {
+        flags.push_str(" --overwrite-luks-content");
+    }
+
+    // IMPORTANT: Point squash_manager to the PAYLOAD directory, not the build root
+    let input_dir = build_dir.join("payload");
     script.push_str(&format!(
-        "squash_manager-rs create {} --no-progress \"{}\" \"{}\"\n",
+        "squash_manager-rs create {} {} --no-progress \"{}\" \"{}\"\n",
         encrypt_flag,
-        build_dir.display(),
-        output.display()
+        flags,
+        input_dir.display(),
+        options.output.display()
     ));
 
     Ok(script)
@@ -221,21 +243,23 @@ mod tests {
         let build_dir = prepare_staging(&targets).unwrap();
         
         assert!(build_dir.exists());
-        assert!(build_dir.join("list.yaml").exists());
-        assert!(build_dir.join("to_restore").exists());
+        let payload_dir = build_dir.join("payload");
+        assert!(payload_dir.exists());
+        assert!(payload_dir.join("list.yaml").exists());
+        assert!(payload_dir.join("to_restore").exists());
         
         // Check stubs
         // ID 1: data.txt (file)
-        assert!(build_dir.join("to_restore/1/data.txt").exists());
-        assert!(build_dir.join("to_restore/1/data.txt").metadata().unwrap().is_file());
-        assert_eq!(build_dir.join("to_restore/1/data.txt").metadata().unwrap().len(), 0); // Stub is empty
+        assert!(payload_dir.join("to_restore/1/data.txt").exists());
+        assert!(payload_dir.join("to_restore/1/data.txt").metadata().unwrap().is_file());
+        assert_eq!(payload_dir.join("to_restore/1/data.txt").metadata().unwrap().len(), 0); // Stub is empty
         
         // ID 2: config (dir)
-        assert!(build_dir.join("to_restore/2/config").exists());
-        assert!(build_dir.join("to_restore/2/config").metadata().unwrap().is_dir());
+        assert!(payload_dir.join("to_restore/2/config").exists());
+        assert!(payload_dir.join("to_restore/2/config").metadata().unwrap().is_dir());
         
         // Check manifest content validation
-        let manifest_content = fs::read_to_string(build_dir.join("list.yaml")).unwrap();
+        let manifest_content = fs::read_to_string(payload_dir.join("list.yaml")).unwrap();
         assert!(manifest_content.contains("data.txt"));
         assert!(manifest_content.contains("config"));
     }
@@ -259,7 +283,14 @@ mod tests {
              ]
         };
         
-        let script = generate_freeze_script(&manifest, &build_dir, &output, false).unwrap();
+        let options = FreezeOptions {
+            encrypt: false,
+            output: output.clone(),
+            overwrite_files: false,
+            overwrite_luks_content: false,
+        };
+        
+        let script = generate_freeze_script(&manifest, &build_dir, &options).unwrap();
         
         assert!(script.contains("mount --bind \"/src/dir1/file1\""));
         assert!(script.contains("squash_manager-rs create"));

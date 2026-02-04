@@ -32,15 +32,22 @@ teardown() {
     rm -rf "$TEST_DIR"
 }
 
-@test "Freeze: Basic archive creation" {
+@test "Freeze: Fail if existing file (no overwrite)" {
     OUT="$TEST_DIR/archive.sqfs"
+    # Create empty file to trigger overwrite error
+    touch "$OUT"
     run $ZKS_BIN freeze "$SRC" "$OUT"
+    assert_failure
+    assert_output --partial "exists"
+}
+
+@test "Freeze: Auto-generate name if output is directory" {
+    # Directory exists
+    run $ZKS_BIN freeze "$SRC" "$TEST_DIR"
     assert_success
-    [ -f "$OUT" ]
-    
-    # Verify it is a valid squashfs
-    run file "$OUT"
-    assert_output --partial "Squashfs filesystem"
+    # Check that a .sqfs file was created inside TEST_DIR
+    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs"
+    assert_line --index 0 --partial ".sqfs"
 }
 
 @test "Freeze: Using -r (read from file)" {
@@ -69,11 +76,4 @@ teardown() {
     # Expect error from prepare_staging or main
     # "Failed to get metadata" or "No targets"
     assert_output --partial "Failed"
-}
-
-@test "Freeze: Fail if output is directory without prompt impl" {
-    mkdir -p "$TEST_DIR/outdir"
-    run $ZKS_BIN freeze "$SRC" "$TEST_DIR/outdir"
-    assert_failure
-    assert_output --partial "is a directory"
 }

@@ -242,6 +242,14 @@ pub enum Commands {
         /// Use experimental custom progress bar (broken, for testing only)
         #[arg(long)]
         alfa_progress: bool,
+
+        /// Overwrite files inside existing archive (Applies to both Plain and LUKS)
+        #[arg(long)]
+        overwrite_files: bool,
+
+        /// Replace ENTIRE content of LUKS container (Requires LUKS output)
+        #[arg(long)]
+        overwrite_luks_content: bool,
     },
     /// Mount a SquashFS archive to a directory (using squashfuse)
     Mount {
@@ -539,11 +547,80 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             no_progress,
             vanilla_progress,
             alfa_progress,
+            overwrite_files,
+            overwrite_luks_content,
         } => {
             // Define compression strategy
             let comp_mode = CompressionMode::from_level(compression);
 
+            // 0. Handle Output Path (Auto-generation if directory or omitted)
+            // Logic:
+            // If output_path is None -> Error (or current dir? Spec says "Output path required" in table, but zks passes it)
+            // Wait, old table for SM said "Output path required" for empty input.
+            // But new requirement: "squash_manager-rs create <src> <existing_dir>" -> Auto-gen filename
+            // So we need to handle output_path.
+            
+            let final_output = match &output_path {
+                Some(p) => {
+                    if p.is_dir() {
+                        // Auto-generate filename inside this directory
+                        // Format: prefix_unixtime_random.extension
+                        // prefix = input dir name
+                        let prefix = input_path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("archive");
+                        
+                        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        let rnd: u32 = rand::rng().random_range(100000..999999);
+                        
+                        let ext = if encrypt { "sqfs_luks.img" } else { "sqfs" };
+                        let filename = format!("{}_{}_{}.{}", prefix, timestamp, rnd, ext);
+                        
+                        let final_path = p.join(filename);
+                        println!("Auto-generated output filename: {}", final_path.display());
+                        final_path
+                    } else {
+                        // It's a file path (existing or not)
+                        p.to_path_buf()
+                    }
+                },
+                None => return Err(anyhow!("Output path required")),
+            };
+            
+            // 0.1 Check for Existing Output
+            if final_output.exists() {
+                let is_luks = is_luks_image(&final_output, executor);
+                // Check valid SquashFS signature (magic number)
+                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().unwrap()]) {
+                     String::from_utf8_lossy(&output.stdout).contains("Squashfs")
+                } else { false };
+
+                if !overwrite_files && !overwrite_luks_content {
+                     return Err(anyhow!("Output file exists.\nUse --overwrite-files to update content (append).\nUse --overwrite-luks-content to replace LUKS container payload."));
+                }
+                
+                if overwrite_files {
+                    // Supported for Plain SQFS and LUKS
+                    if !is_luks && !is_sqfs {
+                         return Err(anyhow!("Target exists but is not a valid SquashFS or LUKS container. Cannot update."));
+                    }
+                    // Logic continues below...
+                    // For LUKS: we open it and then append.
+                    // For Plain: we just run mksquashfs (default is append).
+                }
+                
+                if overwrite_luks_content {
+                    if !is_luks {
+                         return Err(anyhow!("--overwrite-luks-content requires a valid LUKS container target."));
+                    }
+                    // Logic continues below...
+                    // We open LUKS, then run mksquashfs with -noappend.
+                }
+            }
+
             if encrypt {
+                // ENCRYPTED FLOW
+                // ...
                 // CRITICAL CHANGE: Disable archive support for LUKS due to persistent I/O errors
                 if !input_path.is_dir() {
                     return Err(anyhow!("Encrypted mode (-e) currently supports only DIRECTORIES.\nPlease extract the archive first and point to the directory."));
@@ -564,86 +641,93 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     return Err(anyhow!("Could not determine input directory size or empty input"));
                 }
 
-                let output_buf = output_path.as_ref().ok_or(anyhow!("Output path required"))?;
+                let output_buf = &final_output; // Use resolved path
                 
-                // Overhead calc
-                let fs_overhead = get_fs_overhead_percentage(output_buf, executor);
-                let overhead_percent = fs_overhead;
+                // If appending/replacing, we don't recreate the container file
+                // UNLESS --overwrite-luks-content? No, that replaces CONTENT, not container.
+                // Actually, if we want to replace *container*, user should delete it.
+                // The flag is --overwrite-luks-content (payload).
                 
-                let overhead_bytes = (raw_size_bytes as f64 * (overhead_percent as f64 / 100.0)) as u64;
-                let luks_header_bytes = 32 * 1024 * 1024; // 32MB for LUKS2 header
-                let safety_buffer = 128 * 1024 * 1024; // 128MB safety buffer
-                
-                let unaligned_size = raw_size_bytes + overhead_bytes + luks_header_bytes + safety_buffer;
-                
-                // Align to 1MB (1024*1024) to ensure loop device creates exactly this size
-                // (avoiding partial sectors which could be dropped by kernel)
-                let align_size = 1024 * 1024;
-                let container_size = (unaligned_size + align_size - 1) / align_size * align_size;
+                // If file exists, skip creation/formatting
+                if !final_output.exists() { 
+                    // ... Normal creation logic ...
+                    
+                    // Overhead calc
+                    let fs_overhead = get_fs_overhead_percentage(output_buf, executor);
+                    let overhead_percent = fs_overhead;
+                    
+                    let overhead_bytes = (raw_size_bytes as f64 * (overhead_percent as f64 / 100.0)) as u64;
+                    let luks_header_bytes = 32 * 1024 * 1024; // 32MB for LUKS2 header
+                    let safety_buffer = 128 * 1024 * 1024; // 128MB safety buffer
+                    
+                    let unaligned_size = raw_size_bytes + overhead_bytes + luks_header_bytes + safety_buffer;
+                    
+                    // Align to 1MB (1024*1024) to ensure loop device creates exactly this size
+                    // (avoiding partial sectors which could be dropped by kernel)
+                    let align_size = 1024 * 1024;
+                    let container_size = (unaligned_size + align_size - 1) / align_size * align_size;
 
-                if std::env::var("RUST_LOG").is_ok() {
-                    eprintln!("DEBUG: Encrypting directory. Input: {} bytes. Overhead: {}%. Allocating: {} bytes.", 
-                        raw_size_bytes, overhead_percent, container_size);
-                }
-
-                // 1. Create container file with actual allocated space
-                // Using fallocate instead of sparse file (set_len) because:
-                // - Loop devices may fail to write to unallocated sparse regions
-                // - Some filesystems don't support sparse writes through loop
-                // fallocate -l <size> <file>
-                let size_str = container_size.to_string();
-                let output_str_create = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
-                
-                let fallocate_output = executor.run("fallocate", &["-l", &size_str, output_str_create]);
-                if let Ok(output) = fallocate_output {
-                    if !output.status.success() {
-                        // Fallback to dd if fallocate fails (e.g., on some filesystems)
-                        let count = (container_size / (1024 * 1024)) + 1; // Convert to MB
-                        let dd_output = executor.run("dd", &[
-                            "if=/dev/zero",
-                            &format!("of={}", output_str_create),
-                            "bs=1M",
-                            &format!("count={}", count),
-                            "status=none"
-                        ])?;
-                        if !dd_output.status.success() {
-                            return Err(anyhow!("Failed to create container file"));
-                        }
+                    if std::env::var("RUST_LOG").is_ok() {
+                        eprintln!("DEBUG: Encrypting directory. Input: {} bytes. Overhead: {}%. Allocating: {} bytes.", 
+                            raw_size_bytes, overhead_percent, container_size);
                     }
-                } else {
-                    return Err(anyhow!("Failed to run fallocate"));
-                }
+
+                    // 1. Create container file with actual allocated space
+                    // Using fallocate instead of sparse file (set_len) because:
+                    // - Loop devices may fail to write to unallocated sparse regions
+                    // - Some filesystems don't support sparse writes through loop
+                    // fallocate -l <size> <file>
+                    let size_str = container_size.to_string();
+                    let output_str_create = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                    
+                    let fallocate_output = executor.run("fallocate", &["-l", &size_str, output_str_create]);
+                    if let Ok(output) = fallocate_output {
+                        if !output.status.success() {
+                            // Fallback to dd if fallocate fails (e.g., on some filesystems)
+                            let count = (container_size / (1024 * 1024)) + 1; // Convert to MB
+                            let dd_output = executor.run("dd", &[
+                                "if=/dev/zero",
+                                &format!("of={}", output_str_create),
+                                "bs=1M",
+                                &format!("count={}", count),
+                                "status=none"
+                            ])?;
+                            if !dd_output.status.success() {
+                                return Err(anyhow!("Failed to create container file"));
+                            }
+                        }
+                    } else {
+                        return Err(anyhow!("Failed to run fallocate"));
+                    }
+                
+                } // End if !exists
 
                 // Start Transaction for cleanup
                 let mut transaction = LuksTransaction::new(executor, output_buf);
 
                 let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
                 
-                // 2. Format LUKS
-                // Requires root. We assume user has sudo or is root.
-                // -q for quiet (assumes we passed key or interactively asked? Wait, luksFormat requires confirmation 'YES')
-                // For automation/simplicity we might need input. 
-                // But normally ZKS asks user interactive password. 
-                // 'cryptsetup luksFormat' without key file will ask interactive.
-                // We should use run_interactive to inherit stdio.
-                
-                
-                // Get command prefix (e.g. empty if root, or ["sudo"])
+                // 2. Format LUKS (Only if new)
                 let root_cmd = get_effective_root_cmd();
-                
-                println!("Initializing LUKS container...");
-                // Construct command: [sudo] cryptsetup luksFormat -q output
-                let mut luks_args = root_cmd.clone();
-                luks_args.extend(vec!["cryptsetup".to_string(), "luksFormat".to_string(), "-q".to_string(), output_str.to_string()]);
-                
-                let prog = luks_args.remove(0);
-                let args_refs: Vec<&str> = luks_args.iter().map(|s| s.as_str()).collect();
 
-                let status = executor.run_interactive(&prog, &args_refs)
-                    .context("Failed to execute cryptsetup luksFormat")?;
+                if !final_output.exists() || (!overwrite_files && !overwrite_luks_content) {
+                    // Original Creation Logic
+                    println!("Initializing LUKS container...");
+                    // Construct command: [sudo] cryptsetup luksFormat -q output
+                    let mut luks_args = root_cmd.clone();
+                    luks_args.extend(vec!["cryptsetup".to_string(), "luksFormat".to_string(), "-q".to_string(), output_str.to_string()]);
+                    
+                    let prog = luks_args.remove(0);
+                    let args_refs: Vec<&str> = luks_args.iter().map(|s| s.as_str()).collect();
 
-                if !status.success() {
-                    return Err(anyhow!("luksFormat failed"));
+                    let status = executor.run_interactive(&prog, &args_refs)
+                        .context("Failed to execute cryptsetup luksFormat")?;
+
+                    if !status.success() {
+                        return Err(anyhow!("luksFormat failed"));
+                    }
+                } else {
+                     println!("Opening existing LUKS container for update...");
                 }
 
                 // 3. Open
@@ -676,8 +760,21 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                          input_path.to_str().unwrap().to_string(),
                          mapper_path.clone(),
                          "-no-recovery".to_string(),
-                         "-noappend".to_string()
                     ];
+                    
+                    // Logic for -noappend usage in LUKS:
+                    // - Brand new file: Use -noappend (standard)
+                    // - overwrite-luks-content: Use -noappend (overwrite internal FS)
+                    // - overwrite-files: Do NOT use -noappend (append mode)
+                    
+                    let is_new_file = !final_output.exists() || (!overwrite_files && !overwrite_luks_content);
+                    // Actually, if we just created it (is_new_file logic above in block 1), it is new.
+                    // If we opened existing, we only append if overwrite_files.
+                    
+                    if is_new_file || overwrite_luks_content {
+                         cmd_args.push("-noappend".to_string());
+                    }
+                    // Else if overwrite_files, we omit -noappend to allow appending
                     if no_progress { cmd_args.push("-no-progress".to_string()); }
                     let level_str = compression.to_string();
                     
@@ -864,11 +961,9 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             // 2. Archive Repacking (File -> SquashFS)
             if input_path.is_file() {
                 let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
-                let output_str = output_path
-                    .as_ref()
-                    .ok_or(anyhow!("Output path required"))?
-                    .to_str()
-                    .ok_or(anyhow!("Invalid output path"))?;
+                // Use final_output resolved earlier
+                let output_buf = &final_output;
+                let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
 
                 // Determine decompressor
                 let file_name = input_path.file_name()
@@ -921,7 +1016,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let input_size_mb = input_size as f64 / 1024.0 / 1024.0;
 
                 // Create transaction for cleanup on failure
-                let output_buf = output_path.as_ref().ok_or(anyhow!("Output path required"))?;
+                let output_buf = &final_output;
                 let mut transaction = CreateTransaction::new(output_buf.clone());
 
                 // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
@@ -972,93 +1067,121 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             }
 
             // 3. Standard Directory Packing (Directory -> SquashFS)
-            let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
-            let output_buf = output_path
-                .as_ref()
-                .ok_or(anyhow!("Output path required"))?;
-            let output_str = output_buf
-                .to_str()
-                .ok_or(anyhow!("Invalid output path"))?;
+            {
+                let output_buf = &final_output; // Use resolved path
+                let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
+                
+                // Transaction for cleanup
+                let mut transaction = CreateTransaction::new(output_buf.clone());
 
-            // Create transaction for cleanup on failure
-            let mut transaction = CreateTransaction::new(output_buf.clone());
+                // 1. Pack Directory
+                let mk_result = {
+                    let mut cmd_args = vec![input_str, output_str];
+                    
+                    if no_progress {
+                        cmd_args.push("-no-progress");
+                    }
+                    
+                    
+                    let mut mksquashfs_args: Vec<String> = cmd_args.iter().map(|s: &&str| s.to_string()).collect();
+                    
+                    
+                    if !final_output.exists() {
+                         mksquashfs_args.push("-noappend".to_string());
+                    }
+                    // Else if existing (and we are here, meaning overwrite_files is true), we omit -noappend (default is append).
 
-            let mut cmd_args = vec![input_str, output_str];
+                    // Compression
+                    let comp_level_str = compression.to_string();
+                    match comp_mode {
+                        CompressionMode::None => mksquashfs_args.push("-no-compression".to_string()),
+                        CompressionMode::Zstd(_) => {
+                             mksquashfs_args.push("-comp".to_string());
+                             mksquashfs_args.push("zstd".to_string());
+                             mksquashfs_args.push("-Xcompression-level".to_string());
+                             mksquashfs_args.push(comp_level_str.clone());
+                        },
+                    }
+                    
+                    // Convert back to Vec<&str> for execution args
+                    // This is a bit clumsy but safer given we modified Vec<String>
+                    // We need to pass &str to executor
+                    
+                    let mk_prog = "mksquashfs";
+                    
+                    // Helper to run with progress
+                    let run_with_progress = |args: &[String]| -> Result<()> {
+                         let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                         
+                        if no_progress {
+                             let output = executor.run(mk_prog, &refs)?;
+                             if !output.status.success() { 
+                                 let stderr = String::from_utf8_lossy(&output.stderr);
+                                 return Err(anyhow!("mksquashfs failed: {}", stderr)); 
+                             }
+                        } else if vanilla_progress {
+                             let status = executor.run_interactive(mk_prog, &refs)?;
+                             if !status.success() { return Err(anyhow!("mksquashfs failed")); }
+                        } else if alfa_progress {
+                             // Fallback
+                             let output = executor.run_interactive(mk_prog, &refs)?;
+                             if !output.success() { return Err(anyhow!("mksquashfs failed")); }
+                        } else {
+                             // Default Custom Progress
+                             // Get directory size
+                             let dir_size = if let Ok(output) = executor.run("du", &["-sb", input_str]) {
+                                if output.status.success() {
+                                    let out_str = String::from_utf8_lossy(&output.stdout);
+                                    out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
+                                } else { 0 }
+                            } else { 0 };
+                            let dir_size_mb = dir_size as f64 / 1024.0 / 1024.0;
+                            
+                            let pb = ProgressBar::new(dir_size);
+                            pb.set_style(
+                                ProgressStyle::with_template(
+                                    "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
+                                )
+                                .unwrap()
+                                .progress_chars("█▓▒░  ")
+                            );
+                            pb.set_message("Packing directory → SquashFS");
+                            pb.enable_steady_tick(Duration::from_millis(100));
+                            
+                            let output = executor.run_with_file_progress(
+                                mk_prog,
+                                &refs,
+                                output_buf,
+                                &pb,
+                                Duration::from_millis(100),
+                            )?;
+                            
+                            if output.status.success() {
+                                pb.finish_with_message(format!(
+                                    "✓ Packed {:.1} MB successfully",
+                                    dir_size_mb
+                                ));
+                            } else {
+                                pb.finish_with_message("✗ Failed");
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                return Err(anyhow!("mksquashfs failed: {}", stderr));
+                            }
+                        }
+                        Ok(())
+                    };
+                    
+                    run_with_progress(&mksquashfs_args)
+                }; // block result
+                
+                if let Err(e) = mk_result {
+                    return Err(e);
+                }
 
-            // Progress control for PLAIN mode: custom progress is default
-            if no_progress {
-                cmd_args.push("-no-progress");
-            } else if vanilla_progress {
-                // Explicit vanilla mode - show native mksquashfs progress
-                cmd_args.push("-info");
-            } else {
-                // DEFAULT for plain: Custom progress bar - disable mksquashfs output
-                cmd_args.push("-no-progress");
+                transaction.set_success();
+                Ok(())
             }
-
-            let comp_level_str = compression.to_string();
-            comp_mode.apply_to_mksquashfs(&mut cmd_args, &comp_level_str);
-
-            if no_progress {
-                // Silent mode: capture output
-                let output = executor.run("mksquashfs", &cmd_args)?;
-                if !output.status.success() {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(anyhow!("mksquashfs failed: {}", stderr));
-                }
-            } else if vanilla_progress {
-                // Vanilla mode: show native mksquashfs progress in real-time
-                let status = executor.run_interactive("mksquashfs", &cmd_args)
-                    .context("Failed to execute mksquashfs")?;
-                if !status.success() {
-                    return Err(anyhow!("mksquashfs failed"));
-                }
-            } else {
-                // DEFAULT for plain: Custom progress bar mode
-                // Get directory size for progress estimation
-                let dir_size = if let Ok(output) = executor.run("du", &["-sb", input_str]) {
-                    if output.status.success() {
-                        let out_str = String::from_utf8_lossy(&output.stdout);
-                        out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
-                    } else { 0 }
-                } else { 0 };
-                
-                let dir_size_mb = dir_size as f64 / 1024.0 / 1024.0;
-                
-                let pb = ProgressBar::new(dir_size);
-                pb.set_style(
-                    ProgressStyle::with_template(
-                        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
-                    )
-                    .unwrap()
-                    .progress_chars("█▓▒░  ")
-                );
-                pb.set_message("Packing directory → SquashFS");
-                pb.enable_steady_tick(Duration::from_millis(100));
-                
-                let output = executor.run_with_file_progress(
-                    "mksquashfs",
-                    &cmd_args,
-                    output_buf,
-                    &pb,
-                    Duration::from_millis(100),
-                )?;
-                
-                if output.status.success() {
-                    pb.finish_with_message(format!(
-                        "✓ Packed {:.1} MB successfully",
-                        dir_size_mb
-                    ));
-                } else {
-                    pb.finish_with_message("✗ Failed");
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(anyhow!("mksquashfs failed: {}", stderr));
-                }
-            }
-
-            transaction.set_success();
-            Ok(())
-        }
+        } // End Create
         Commands::Mount { image, mount_point } => {
             if !image.exists() {
                 return Err(anyhow!("Image file does not exist: {:?}", image));
@@ -1501,14 +1624,15 @@ mod tests {
         mock.expect_run()
             .withf(move |program, args| {
                  program == "mksquashfs" &&
-                 args.len() == 7 &&
+                 args.len() == 8 &&
                  args[0] == input_path_check &&
                  args[1] == "output.sqfs" &&
                  args[2] == "-no-progress" &&
-                 args[3] == "-comp" &&
-                 args[4] == "zstd" &&
-                 args[5] == "-Xcompression-level" &&
-                 args[6] == DEFAULT_ZSTD_COMPRESSION.to_string()
+                 args[3] == "-noappend" &&
+                 args[4] == "-comp" &&
+                 args[5] == "zstd" &&
+                 args[6] == "-Xcompression-level" &&
+                 args[7] == DEFAULT_ZSTD_COMPRESSION.to_string()
             })
             .times(1)
             .returning(|_, _| Ok(Output {
@@ -1526,6 +1650,8 @@ mod tests {
                 no_progress: true,
                 vanilla_progress: false,
                 alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
             },
         };
 
@@ -1683,13 +1809,15 @@ mod tests {
 
         let args = SquashManagerArgs {
             command: Commands::Create {
-                input_path: input_path,
+                input_path,
                 output_path: Some(output_path),
                 encrypt: true,
                 compression: DEFAULT_ZSTD_COMPRESSION,
                 no_progress: true,
                 vanilla_progress: false,
                 alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
             },
         };
 
@@ -1803,11 +1931,12 @@ mod tests {
         mock.expect_run()
             .withf(move |program, args| {
                  program == "mksquashfs" &&
-                 args.len() == 4 && // input, output, -no-progress, -no-compression
+                 args.len() == 5 && // input, output, -no-progress, -noappend, -no-compression
                  args[0] == input_path_check &&
                  args[1] == "output_no_comp.sqfs" &&
                  args[2] == "-no-progress" &&
-                 args[3] == "-no-compression"
+                 args[3] == "-noappend" &&
+                 args[4] == "-no-compression"
             })
             .times(1)
             .returning(|_, _| Ok(Output {
@@ -1818,13 +1947,15 @@ mod tests {
 
         let args = SquashManagerArgs {
             command: Commands::Create {
-                input_path: input_path,
+                input_path,
                 output_path: Some(PathBuf::from("output_no_comp.sqfs")),
                 encrypt: false,
                 compression: 0,
                 no_progress: true,
                 vanilla_progress: false,
                 alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
             },
         };
 

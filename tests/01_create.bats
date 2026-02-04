@@ -25,6 +25,14 @@ teardown() {
     [ -f "$TEST_DIR/out.sqfs" ]
 }
 
+@test "Logic: Ошибка если выходной файл существует" {
+    touch "$TEST_DIR/existing.sqfs"
+    # По умолчанию (без --overwrite-*) должно падать
+    run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/existing.sqfs" --no-progress
+    assert_failure
+    assert_output --partial "exists"
+}
+
 @test "Logic: Проверка типа файла через 'file'" {
     run $ZKS_SQM_BIN create "$SRC" "$TEST_DIR/type_check.sqfs" --no-progress
     assert_success

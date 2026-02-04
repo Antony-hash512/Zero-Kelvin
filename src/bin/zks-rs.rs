@@ -77,6 +77,14 @@ pub enum Commands {
         /// Read the list of target paths from a file
         #[arg(short, long, value_name = "FILE")]
         read: Option<PathBuf>,
+
+        /// Overwrite files inside existing archive (Applies to both Plain and LUKS)
+        #[arg(long)]
+        overwrite_files: bool,
+
+        /// Replace ENTIRE content of LUKS container (Requires LUKS output)
+        #[arg(long)]
+        overwrite_luks_content: bool,
     },
     /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
@@ -156,10 +164,15 @@ fn main() -> Result<()> {
         .unwrap();
 
     match args.command {
-        Commands::Freeze { args, encrypt, read } => {
+        Commands::Freeze { args, encrypt, read, overwrite_files, overwrite_luks_content } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
             let executor = RealSystem;
-            let options = FreezeOptions { encrypt, output };
+            let options = FreezeOptions { 
+                encrypt, 
+                output,
+                overwrite_files,
+                overwrite_luks_content,
+            };
             
             // Log info
             // println!("Freezing {:?} to {:?}", targets, options.output);
@@ -211,10 +224,8 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
         return Err(anyhow!("No targets specified to freeze"));
     }
     
-    // 4. Handle Output Directory case (Prompting not impl, error for now)
-    if output_path.is_dir() {
-        return Err(anyhow!("Output path '{:?}' is a directory. Please specify the full archive filename (interactive prompting not implemented).", output_path));
-    }
+    // 4. Handle Output Directory case
+    // squash_manager-rs now handles directory selection/autonaming.
     
     Ok((targets, output_path))
 }
@@ -246,11 +257,15 @@ mod tests {
                 args,
                 encrypt,
                 read,
+                overwrite_files,
+                overwrite_luks_content,
             } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
                 assert!(encrypt);
                 assert_eq!(read, Some(PathBuf::from("/tmp/list.txt")));
+                assert!(!overwrite_files);
+                assert!(!overwrite_luks_content);
             }
             _ => panic!("Expected Freeze command"),
         }

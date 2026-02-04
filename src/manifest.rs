@@ -29,6 +29,7 @@ pub struct FileEntry {
     pub restore_path: Option<String>,
 
     // Legacy format
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub original_path: Option<String>,
 }
 
@@ -67,6 +68,7 @@ pub struct Metadata {
     pub date: String,
     pub host: String,
     // Optional for backward compatibility with legacy archives
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub privilege_mode: Option<PrivilegeMode>,
 }
 
