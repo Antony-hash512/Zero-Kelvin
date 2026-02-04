@@ -61,6 +61,28 @@ impl FileEntry {
             original_path: None,
         })
     }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Some(name) = &self.name {
+            if name.contains("..") || name.contains('/') {
+                return Err(anyhow!("Invalid name contains '..' or '/': {}", name));
+            }
+        }
+
+        if let Some(path) = &self.restore_path {
+            if path.split('/').any(|part| part == "..") {
+                return Err(anyhow!("Invalid restore_path contains '..': {}", path));
+            }
+        }
+
+        if let Some(path) = &self.original_path {
+            if path.split('/').any(|part| part == "..") {
+                return Err(anyhow!("Invalid original_path contains '..': {}", path));
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +124,13 @@ impl Manifest {
             metadata,
             files,
         }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        for entry in &self.files {
+            entry.validate().context(format!("Validation failed for file ID {}", entry.id))?;
+        }
+        Ok(())
     }
 }
 
@@ -194,6 +223,70 @@ files: []
         assert_eq!(entry.entry_type, EntryType::Directory);
         assert_eq!(entry.name.unwrap(), "my_dir");
         assert_eq!(entry.restore_path.unwrap(), temp.path().to_string_lossy());
+    }
+
+    #[test]
+    fn test_file_entry_validation() {
+        // Valid case
+        let entry = FileEntry {
+            id: 1,
+            entry_type: EntryType::File,
+            name: Some("valid.txt".to_string()),
+            restore_path: Some("/home/user".to_string()),
+            original_path: None,
+        };
+        assert!(entry.validate().is_ok());
+
+        // Invalid: .. in name
+        let bad_name = FileEntry {
+            id: 2,
+            entry_type: EntryType::File,
+            name: Some("../bad.txt".to_string()),
+            restore_path: Some("/home".to_string()),
+            original_path: None,
+        };
+        assert!(bad_name.validate().is_err());
+
+        // Invalid: .. in restore_path
+        let bad_path = FileEntry {
+            id: 3,
+            entry_type: EntryType::File,
+            name: Some("ok.txt".to_string()),
+            restore_path: Some("/home/../etc".to_string()),
+            original_path: None,
+        };
+        assert!(bad_path.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_validation() {
+        let entry_ok = FileEntry {
+            id: 1,
+            entry_type: EntryType::File,
+            name: Some("ok".to_string()),
+            restore_path: Some("/ok".to_string()),
+            original_path: None,
+        };
+
+        let manifest_ok = Manifest::new(
+            Metadata::new("host".to_string(), PrivilegeMode::User),
+            vec![entry_ok]
+        );
+        assert!(manifest_ok.validate().is_ok());
+
+        let entry_bad = FileEntry {
+            id: 2,
+            entry_type: EntryType::File,
+            name: Some("../bad".to_string()),
+            restore_path: Some("/ok".to_string()),
+            original_path: None,
+        };
+
+        let manifest_bad = Manifest::new(
+             Metadata::new("host".to_string(), PrivilegeMode::User),
+             vec![entry_bad]
+        );
+        assert!(manifest_bad.validate().is_err());
     }
 }
 

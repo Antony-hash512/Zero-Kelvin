@@ -109,6 +109,14 @@ pub enum Commands {
         /// Path to the SquashFS archive
         #[arg(value_name = "ARCHIVE_PATH")]
         archive_path: PathBuf,
+
+        /// Overwrite existing files
+        #[arg(long)]
+        overwrite: bool,
+
+        /// Skip existing files (conflicts)
+        #[arg(long)]
+        skip_existing: bool,
     },
     /// Check integrity of an archive against the original files
     Check {
@@ -127,7 +135,7 @@ pub enum Commands {
 }
 
 use anyhow::{Result, anyhow, Context};
-use zero_kelvin_stazis::engine::{self, FreezeOptions};
+use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::RealSystem;
 use std::fs;
@@ -221,8 +229,14 @@ fn main() -> Result<()> {
             engine::freeze(&targets, &options, &executor)?;
             println!("Successfully created archive: {:?}", options.output);
         }
-        Commands::Unfreeze { archive_path } => {
-            println!("Unfreeze not yet implemented. Path: {:?}", archive_path);
+        Commands::Unfreeze { archive_path, overwrite, skip_existing } => {
+            let options = UnfreezeOptions {
+                overwrite,
+                skip_existing,
+            };
+            let executor = RealSystem;
+            engine::unfreeze(&archive_path, &options, &executor)?;
+            println!("Unfreeze completed successfully.");
         }
         Commands::Check { archive_path, use_cmp, force_delete } => {
             println!("Check not yet implemented. Path: {:?}, cmp: {}, del: {}", archive_path, use_cmp, force_delete);

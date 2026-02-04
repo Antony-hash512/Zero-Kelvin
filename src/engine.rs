@@ -6,6 +6,7 @@ use crate::utils;
 use std::fs;
 use fs2::FileExt; // For flock
 // rand is in Cargo.toml
+use tempfile;
 
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
@@ -175,6 +176,170 @@ pub struct FreezeOptions {
     pub overwrite_luks_content: bool,
     pub progress_mode: ProgressMode,
     pub compression: Option<u32>,
+}
+
+pub struct UnfreezeOptions {
+    pub overwrite: bool,
+    pub skip_existing: bool,
+}
+
+pub fn unfreeze<E: CommandExecutor>(
+    archive_path: &Path,
+    options: &UnfreezeOptions,
+    executor: &E,
+) -> Result<()> {
+    // 1. Create temporary mount point
+    let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
+    let mount_point = mount_dir.path();
+
+    // 2. Mount Archive
+    let status = executor.run_interactive("squash_manager-rs", &[
+        "mount", 
+        archive_path.to_str().unwrap(), 
+        mount_point.to_str().unwrap()
+    ])?;
+
+    if !status.success() {
+        return Err(anyhow!("Failed to mount archive"));
+    }
+
+    // Ensure we unmount even if errors occur later
+    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
+    impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
+        fn drop(&mut self) {
+             let _ = self.0.run("squash_manager-rs", &["umount", self.1.to_str().unwrap()]);
+        }
+    }
+    let _guard = UnmountGuard(executor, mount_point);
+
+    restore_from_mount(mount_point, options, executor)
+}
+
+fn restore_from_mount<E: CommandExecutor>(
+    mount_point: &Path,
+    options: &UnfreezeOptions,
+    executor: &E
+) -> Result<()> {
+    // 3. Read Manifest
+    let manifest_path = mount_point.join("list.yaml");
+    if !manifest_path.exists() {
+        return Err(anyhow!("Archive missing list.yaml - invalid format"));
+    }
+    
+    let f = fs::File::open(&manifest_path)?;
+    let manifest: Manifest = serde_yaml::from_reader(f)?;
+    
+    // 4. Validate manifest (paths)
+    manifest.validate()?;
+    
+    println!("Restoring {} files from archive...", manifest.files.len());
+    
+    // 5. Restore Loop
+    for entry in &manifest.files {
+        // Determine destination path (handle Legacy vs New format)
+        let (dest_path, restore_parent) = if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
+             let p = PathBuf::from(parent);
+             (p.join(name), p)
+        } else if let Some(orig) = &entry.original_path {
+             let p = PathBuf::from(orig);
+             let parent = p.parent().unwrap_or(Path::new("/")).to_path_buf();
+             (p, parent)
+        } else {
+             return Err(anyhow!("Invalid entry {}: missing path info", entry.id));
+        };
+        
+        // Derive name if missing (Legacy)
+        let entry_name = entry.name.as_deref()
+            .or(dest_path.file_name().and_then(|n| n.to_str()))
+            .unwrap_or("unknown");
+            
+        // Construct source path in mount
+        // Structure: mount_point/to_restore/<id>/<name>
+        let src_path = mount_point
+            .join("to_restore")
+            .join(entry.id.to_string())
+            .join(entry_name);
+
+        println!("Restoring: {:?} -> {:?}", entry_name, dest_path);
+        
+        // Conflict Check
+        let mut extra_rsync_flags = Vec::new();
+
+        if dest_path.exists() {
+             if options.skip_existing {
+                 if dest_path.is_dir() {
+                     println!("Merging into existing directory (skipping conflicts): {:?}", dest_path);
+                     extra_rsync_flags.push("--ignore-existing");
+                 } else {
+                     println!("Skipping existing file: {:?}", dest_path);
+                     continue;
+                 }
+             } else if !options.overwrite {
+                 return Err(anyhow!("File exists: {:?}. Use --overwrite to replace/merge.", dest_path));
+             }
+        }
+        
+        // Ensure parent directory exists
+        if !restore_parent.exists() {
+             if let Err(_) = fs::create_dir_all(&restore_parent) {
+                  // Fallback to sudo mkdir -p
+                  if let Some(runner) = utils::check_root_or_get_runner("Parent directory creation requires root")? {
+                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().unwrap()])?;
+                       if !status.success() {
+                           return Err(anyhow!("Failed to create directory {:?}", restore_parent));
+                       }
+                  } else {
+                       return Err(anyhow!("Failed to create directory {:?}", restore_parent));
+                  }
+             }
+        }
+
+        let src_str = src_path.to_str().unwrap();
+        let dest_str = dest_path.to_str().unwrap();
+        
+        println!("Restoring {} -> {}", src_str, dest_str);
+
+        let mut final_src = src_str.to_string();
+        if src_path.is_dir() {
+            final_src.push('/');
+        }
+        
+        // Use user rsync by default
+        let mut args = vec!["-a", "--info=progress2", &final_src, dest_str];
+        // Insert flags before source/dest
+        for flag in &extra_rsync_flags {
+            args.insert(2, flag);
+        }
+
+        let rsync_status = executor.run_interactive("rsync", &args);
+        
+        let need_sudo = if let Ok(s) = rsync_status {
+             !s.success()
+        } else {
+             true
+        };
+        
+        if need_sudo || manifest.metadata.privilege_mode == Some(PrivilegeMode::Root) {
+             if let Some(runner) = utils::check_root_or_get_runner("Restoration requires elevated privileges")? {
+                  println!("Retrying with {}", runner);
+                  
+                  let mut sudo_args = vec!["rsync", "-a", "--info=progress2", &final_src, dest_str];
+                  for flag in &extra_rsync_flags {
+                      sudo_args.insert(2, flag);
+                  }
+                  
+                  let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
+                  if !status.success() {
+                      return Err(anyhow!("Failed to restore {:?}: rsync failed even with sudo", dest_path));
+                  }
+             } else {
+                  // Already tried as root or no runner, and failed
+                   return Err(anyhow!("Failed to restore {:?}", dest_path));
+             }
+        }
+    }
+
+    Ok(())
 }
 
 pub fn freeze<E: CommandExecutor>(
@@ -401,5 +566,118 @@ mod tests {
         // We verified generate_freeze_script above.
         // Mocking execution is complex because prepare_staging does FS ops.
         // We'll trust logic + integration tests for full flow.
+    }
+
+    #[test]
+    fn test_restore_from_mount() {
+        use crate::executor::MockCommandExecutor;
+        use std::os::unix::process::ExitStatusExt;
+
+        let mount = tempfile::tempdir().unwrap();
+        let mount_path = mount.path();
+
+        // 1. Create file structure in mount
+        let restore_subdir = mount_path.join("to_restore").join("1");
+        fs::create_dir_all(&restore_subdir).unwrap();
+        fs::write(restore_subdir.join("myfile.txt"), "content").unwrap();
+
+        // 2. Create destination
+        let dest = tempfile::tempdir().unwrap();
+        let dest_path_str = dest.path().to_str().unwrap().to_string();
+
+        // 3. Create manifest
+        let manifest = Manifest {
+             metadata: Metadata::new("host".into(), PrivilegeMode::User),
+             files: vec![
+                 FileEntry {
+                     id: 1,
+                     entry_type: crate::manifest::EntryType::File,
+                     name: Some("myfile.txt".into()),
+                     restore_path: Some(dest_path_str.clone()),
+                     original_path: None,
+                 }
+             ]
+        };
+        let f = fs::File::create(mount_path.join("list.yaml")).unwrap();
+        serde_yaml::to_writer(f, &manifest).unwrap();
+
+        // 4. Mock Executor
+        let mut mock = MockCommandExecutor::new();
+        
+        let src_check = restore_subdir.join("myfile.txt").to_str().unwrap().to_string();
+        let dest_check = dest.path().join("myfile.txt").to_str().unwrap().to_string();
+
+        mock.expect_run_interactive()
+            .withf(move |program, args| {
+                 program == "rsync" && 
+                 args.contains(&"-a") &&
+                 args.contains(&src_check.as_str()) && // Check source
+                 args.contains(&dest_check.as_str())   // Check dest
+            })
+            .times(1)
+            .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
+
+        let options = UnfreezeOptions {
+            overwrite: false,
+            skip_existing: false,
+        };
+
+        restore_from_mount(mount_path, &options, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_restore_from_mount_legacy() {
+        use crate::executor::MockCommandExecutor;
+        use std::os::unix::process::ExitStatusExt;
+
+        let mount = tempfile::tempdir().unwrap();
+        let mount_path = mount.path();
+
+        // 1. Create file structure in mount (using derived name from original path)
+        let restore_subdir = mount_path.join("to_restore").join("1");
+        fs::create_dir_all(&restore_subdir).unwrap();
+        fs::write(restore_subdir.join("legacy.txt"), "legacy content").unwrap();
+
+        // 2. Create destination
+        let dest = tempfile::tempdir().unwrap();
+        let dest_path_str = dest.path().join("legacy.txt").to_str().unwrap().to_string();
+
+        // 3. Create Legacy Manifest (no name, no restore_path, only original_path)
+        let manifest = Manifest {
+             metadata: Metadata::new("host".into(), PrivilegeMode::User),
+             files: vec![
+                 FileEntry {
+                     id: 1,
+                     entry_type: crate::manifest::EntryType::File,
+                     name: None, // Missing in legacy
+                     restore_path: None, // Missing in legacy
+                     original_path: Some(dest_path_str.clone()),
+                 }
+             ]
+        };
+        let f = fs::File::create(mount_path.join("list.yaml")).unwrap();
+        serde_yaml::to_writer(f, &manifest).unwrap();
+
+        // 4. Mock Executor
+        let mut mock = MockCommandExecutor::new();
+        
+        let src_check = restore_subdir.join("legacy.txt").to_str().unwrap().to_string(); // Name derived from filename
+        let dest_check = dest_path_str.clone();
+
+        mock.expect_run_interactive()
+            .withf(move |program, args| {
+                 program == "rsync" && 
+                 args.contains(&src_check.as_str()) && 
+                 args.contains(&dest_check.as_str())
+            })
+            .times(1)
+            .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
+
+        let options = UnfreezeOptions {
+            overwrite: false,
+            skip_existing: false,
+        };
+
+        restore_from_mount(mount_path, &options, &mock).unwrap();
     }
 }
