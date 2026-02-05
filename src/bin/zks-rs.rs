@@ -15,7 +15,7 @@ pub struct ZksArgs {
 const BANNER: &str = r#"
 Copyleft 🄯 2026 :: GPL3
 github.com/Antony-hash512/Zero-Kelvin-Stazis
- ____  _            _     
+ ____  _ Zero Kelvin_     
 / ___|| |_ __ _ ___(_)___ 
 \___ \| __/ _` |_  / / __|
  ___) | || (_| |/ /| \__ \

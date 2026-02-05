@@ -263,150 +263,40 @@ pub fn check<E: CommandExecutor>(
             .join(entry.id.to_string())
             .join(entry_name_in_mount);
 
-        if !mount_root.exists() {
+        if fs::symlink_metadata(&mount_root).is_err() {
              println!("ERROR: Archive corrupted, missing internal root for id {}", entry.id);
              continue;
         }
 
-        // Walker: contents_first(true) permits deleting dirs after their contents
-        let walker = walkdir::WalkDir::new(&mount_root).contents_first(true);
-        
-        for item in walker.into_iter().filter_map(|e| e.ok()) {
-            let mount_path = item.path();
-            
-            // Calculate relative path from mount_root
-            let rel_path = match mount_path.strip_prefix(&mount_root) {
-                Ok(p) => p,
-                Err(_) => continue, // Should not happen
-            };
-            
-            let live_path = live_root.join(rel_path);
-            let display_name = live_path.display().to_string();
-
-            // Perform Check for this specific item
-            if !live_path.exists() {
-                println!("MISSING: {}", display_name);
-                stats_missing += 1;
-                continue;
-            }
-
-            let live_meta = match fs::symlink_metadata(&live_path) {
-                Ok(m) => m,
-                Err(_) => {
-                    println!("ERROR: Failed to read metadata for {}", display_name);
-                    continue;
-                }
-            };
-            
-            let mount_meta = match fs::symlink_metadata(mount_path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            // Check Type
-            if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
-               live_meta.file_type().is_file() != mount_meta.file_type().is_file() ||
-               live_meta.file_type().is_symlink() != mount_meta.file_type().is_symlink() { 
-                println!("MISMATCH (Type): {}", display_name);
-                stats_mismatch += 1;
-                continue;
-            }
-            
-            if live_meta.is_dir() {
-                // Directory: Try delete if forced, else just match
-                if options.force_delete {
-                     // Try to remove. If not empty (because some children were skipped), it will fail safely.
-                     if let Err(e) = fs::remove_dir(&live_path) {
-                         // Check if it's "Directory not empty"
-                         if e.kind() == std::io::ErrorKind::DirectoryNotEmpty || e.raw_os_error() == Some(39) { // 39 is ENOTEMPTY
-                             // This is expected if we skipped files.
-                             // Count as "Matched" (structure exists)
-                             println!("MATCH (Dir): {}", display_name); 
-                             stats_dirs_matched += 1;
-                         } else {
-                             println!("ERROR: Failed to delete dir {}: {}", display_name, e);
-                         }
-                     } else {
-                         println!("DELETED (Dir): {}", display_name);
-                         stats_dirs_deleted += 1;
-                     }
-                } else {
-                    println!("MATCH (Dir): {}", display_name);
-                    stats_dirs_matched += 1;
-                }
-                continue;
-            }
-
-            if live_meta.is_symlink() {
-                // Check Target
-                let live_target = fs::read_link(&live_path);
-                let mount_target = fs::read_link(mount_path);
-                
-                if live_target.is_err() || mount_target.is_err() || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap() {
-                     println!("MISMATCH (Link Target): {} ({:?} vs {:?})", 
-                         display_name, live_target, mount_target);
-                     stats_mismatch += 1;
-                     continue;
-                }
-                
-                // If force_delete, falls through to generic removal logic below (remove_file works on links)
-                // But we need to update stat counter correctly, not as 'file'
-            } else {
-                // Check Size (Only for files, dirs/links size is metadata)
-                if live_meta.len() != mount_meta.len() {
-                     println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
-                     stats_mismatch += 1;
-                     continue;
-                }
-            }
-            
-            // Deep Check
-            if options.use_cmp {
-                // If it's a file
-                 if live_meta.is_file() {
-                    let matches = compare_files(&live_path, mount_path).unwrap_or(false);
-                    if !matches {
-                         println!("MISMATCH (Content): {}", display_name);
-                         stats_mismatch += 1;
-                         continue;
+        if entry.entry_type == crate::manifest::EntryType::File || entry.entry_type == crate::manifest::EntryType::Symlink {
+            // Check single item
+            check_item(&live_root, &mount_root, options, 
+                       &mut stats_files_matched, &mut stats_dirs_matched, &mut stats_links_matched,
+                       &mut stats_files_deleted, &mut stats_dirs_deleted, &mut stats_links_deleted,
+                       &mut stats_mismatch, &mut stats_missing, &mut stats_skipped)?;
+        } else {
+            // Directory: Use Walker
+            let walker = walkdir::WalkDir::new(&mount_root).contents_first(true);
+            for item in walker {
+                let item = match item {
+                    Ok(i) => i,
+                    Err(e) => {
+                        println!("WALK ERROR: {}", e);
+                        continue;
                     }
-                 }
+                };
+                let mount_path = item.path();
+                let rel_path = match mount_path.strip_prefix(&mount_root) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let live_path = live_root.join(rel_path);
+                
+                check_item(&live_path, mount_path, options,
+                           &mut stats_files_matched, &mut stats_dirs_matched, &mut stats_links_matched,
+                           &mut stats_files_deleted, &mut stats_dirs_deleted, &mut stats_links_deleted,
+                           &mut stats_mismatch, &mut stats_missing, &mut stats_skipped)?;
             }
-            
-            // If we are here, it matches
-            if options.force_delete {
-                 // Safety Gate: Check mtime (Seconds Precision)
-                 let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                     .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-                 
-                 let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                     .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-                 
-                 // If live is NEWER than archive, skip
-                 if live_mtime > archive_mtime {
-                      println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
-                      stats_skipped += 1;
-                      continue;
-                 }
-                 
-                 if let Err(e) = fs::remove_file(&live_path) {
-                      println!("ERROR: Failed to delete {}: {}", display_name, e);
-                  } else {
-                       println!("DELETED: {}", display_name);
-                       if live_meta.is_symlink() {
-                           stats_links_deleted += 1;
-                       } else {
-                           stats_files_deleted += 1;
-                       }
-                  }
-             } else {
-                  println!("MATCH: {}", display_name);
-                  if live_meta.is_symlink() {
-                      stats_links_matched += 1;
-                  } else {
-                      stats_files_matched += 1;
-                  }
-             }
         }
     }
     
@@ -417,6 +307,128 @@ pub fn check<E: CommandExecutor>(
     println!("Mismatched: {}, Missing: {}, Skipped (Newer): {}", 
              stats_mismatch, stats_missing, stats_skipped);
     
+    Ok(())
+}
+
+fn check_item(
+    live_path: &Path,
+    mount_path: &Path,
+    options: &CheckOptions,
+    stats_files_matched: &mut u32,
+    stats_dirs_matched: &mut u32,
+    stats_links_matched: &mut u32,
+    stats_files_deleted: &mut u32,
+    stats_dirs_deleted: &mut u32,
+    stats_links_deleted: &mut u32,
+    stats_mismatch: &mut u32,
+    stats_missing: &mut u32,
+    stats_skipped: &mut u32,
+) -> Result<()> {
+    let display_name = live_path.display().to_string();
+
+    // MISSING check
+    let live_meta = match fs::symlink_metadata(live_path) {
+        Ok(m) => m,
+        Err(_) => {
+            println!("MISSING: {}", display_name);
+            *stats_missing += 1;
+            return Ok(());
+        }
+    };
+
+    let mount_meta = match fs::symlink_metadata(mount_path) {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // Should not happen if walker is correct
+    };
+
+    // Check Type
+    if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
+       live_meta.file_type().is_file() != mount_meta.file_type().is_file() ||
+       live_meta.file_type().is_symlink() != mount_meta.file_type().is_symlink() { 
+        println!("MISMATCH (Type): {}", display_name);
+        *stats_mismatch += 1;
+        return Ok(());
+    }
+
+    if live_meta.is_dir() {
+        if options.force_delete {
+             if let Err(e) = fs::remove_dir(live_path) {
+                 if e.kind() == std::io::ErrorKind::DirectoryNotEmpty || e.raw_os_error() == Some(39) {
+                     println!("MATCH (Dir): {}", display_name); 
+                     *stats_dirs_matched += 1;
+                 } else {
+                     println!("ERROR: Failed to delete dir {}: {}", display_name, e);
+                 }
+             } else {
+                 println!("DELETED (Dir): {}", display_name);
+                 *stats_dirs_deleted += 1;
+             }
+        } else {
+            println!("MATCH (Dir): {}", display_name);
+            *stats_dirs_matched += 1;
+        }
+        return Ok(());
+    }
+
+    if live_meta.is_symlink() {
+        let live_target = fs::read_link(live_path);
+        let mount_target = fs::read_link(mount_path);
+        
+        if live_target.is_err() || mount_target.is_err() || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap() {
+             println!("MISMATCH (Link Target): {} ({:?} vs {:?})", 
+                 display_name, live_target, mount_target);
+             *stats_mismatch += 1;
+             return Ok(());
+        }
+    } else {
+        if live_meta.len() != mount_meta.len() {
+             println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
+             *stats_mismatch += 1;
+             return Ok(());
+        }
+
+        if options.use_cmp {
+            let matches = compare_files(live_path, mount_path).unwrap_or(false);
+            if !matches {
+                 println!("MISMATCH (Content): {}", display_name);
+                 *stats_mismatch += 1;
+                 return Ok(());
+            }
+        }
+    }
+
+    // Match found
+    if options.force_delete {
+         let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+         let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+         
+         if live_mtime > archive_mtime {
+              println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
+              *stats_skipped += 1;
+              return Ok(());
+         }
+         
+         if let Err(e) = fs::remove_file(live_path) {
+              println!("ERROR: Failed to delete {}: {}", display_name, e);
+          } else {
+               println!("DELETED: {}", display_name);
+               if live_meta.is_symlink() {
+                   *stats_links_deleted += 1;
+               } else {
+                   *stats_files_deleted += 1;
+               }
+          }
+     } else {
+          println!("MATCH: {}", display_name);
+          if live_meta.is_symlink() {
+              *stats_links_matched += 1;
+          } else {
+              *stats_files_matched += 1;
+          }
+     }
+
     Ok(())
 }
 
@@ -562,7 +574,7 @@ fn restore_from_mount<E: CommandExecutor>(
         println!("Restoring {} -> {}", src_str, dest_str);
 
         let mut final_src = src_str.to_string();
-        if src_path.is_dir() {
+        if entry.entry_type == crate::manifest::EntryType::Directory {
             final_src.push('/');
         }
         
