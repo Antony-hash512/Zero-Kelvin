@@ -135,7 +135,7 @@ pub enum Commands {
 }
 
 use anyhow::{Result, anyhow, Context};
-use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions, CheckOptions};
+use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::RealSystem;
 use std::fs;

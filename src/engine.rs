@@ -11,7 +11,7 @@ use tempfile;
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
-pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> {
+pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, String, std::fs::File)> {
     // 1. Resolve XDG_CACHE_HOME
     let cache_root = get_cache_dir()?;
     let app_cache = cache_root.join("zero-kelvin-stazis");
@@ -27,13 +27,21 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> 
     fs::create_dir_all(&build_dir).context("Failed to create build directory")?;
 
     // 2.1 Create and Lock .lock file
-    // This lock safeguards against GC while this process is alive.
     let lock_path = build_dir.join(".lock");
     let lock_file = fs::File::create(&lock_path).context("Failed to create .lock file")?;
     lock_file.lock_exclusive().context("Failed to acquire exclusive lock on staging directory")?;
 
-    // 2.5 Create 'payload' directory
-    let payload_dir = build_dir.join("payload");
+    // 2.5 Create payload directory with meaningful name
+    // Use the first target's name as the payload directory name.
+    // This allows squash_manager-rs to auto-generate a meaningful filename (e.g., prefix_...)
+    // instead of generic "payload_...".
+    let payload_name = targets.first()
+        .and_then(|t| t.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("payload") // Fallback
+        .to_string();
+
+    let payload_dir = build_dir.join(&payload_name);
     fs::create_dir(&payload_dir).context("Failed to create payload directory")?;
     
     // 3. Create 'to_restore' directory INSIDE payload
@@ -51,9 +59,6 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> 
         fs::create_dir(&container_dir)?;
         
         // Create stub
-        // If target is directory, create directory stub
-        // If target is file, create empty file stub
-        // Note: entry.entry_type was derived from target on disk
         let stub_path = container_dir.join(entry.name.as_ref().unwrap());
         
         match entry.entry_type {
@@ -69,12 +74,6 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> 
     }
     
     // 5. Generate Manifest
-    // Check permissions to decide PrivilegeMode (Logic from Utils)
-    // If ANY target is not readable by user, we default to Root mode requirements?
-    // Wait, if we are preparing staging as user, we can only read user files.
-    // If we need root, this function probably should have been called under sudo?
-    // Or we assume we are running as is.
-    // Let's deduce mode: if we are root -> Root, else User.
     let mode = if utils::is_root()? { PrivilegeMode::Root } else { PrivilegeMode::User };
     let hostname = get_hostname()?;
     
@@ -86,7 +85,7 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, std::fs::File)> 
     let f = fs::File::create(&manifest_path)?;
     serde_yaml::to_writer(f, &manifest)?;
     
-    Ok((build_dir, lock_file))
+    Ok((build_dir, payload_name, lock_file))
 }
 
 /// Tries to garbage collect old staging directories.
@@ -586,36 +585,20 @@ pub fn freeze<E: CommandExecutor>(
 
     // 1. Prepare Staging
     // _lock must be kept in scope to maintain the flock until we are done (or until cleanup)
-    let (build_dir, _lock) = prepare_staging(targets)?;
+    let (build_dir, payload_name, _lock) = prepare_staging(targets)?;
     
-    // 2. Read Manifest (re-read to get file list with correct stub paths if needed? 
-    // No, prepare_staging returned build_dir, manifest is at build_dir/payload/list.yaml.
-    // We need manifest to generate bind mounts.
-    // Optimization: prepare_staging could return Manifest too?
-    // Or we read it back. Reading back ensures consistency.
-    let payload_dir = build_dir.join("payload");
+    // 2. Read Manifest
+    let payload_dir = build_dir.join(&payload_name);
     let manifest_path = payload_dir.join("list.yaml");
     let f = fs::File::open(&manifest_path)?;
     let manifest: Manifest = serde_yaml::from_reader(f)?;
     
     // 3. Generate internal script
-    let script = generate_freeze_script(&manifest, &build_dir, options)?;
+    let script = generate_freeze_script(&manifest, &build_dir, &payload_name, options)?;
     let script_path = build_dir.join("freeze.sh");
     fs::write(&script_path, &script)?;
     
     // 4. Run unshare
-    // unshare -m -U -r --propagation private sh <script>
-    // Note: unshare might not be in PATH? "check_root_or_get_runner" logic?
-    // User Namespace wrapper usually runs as user (if unprivileged userns allowed).
-    // If we needed root, we would have escalated earlier?
-    // "zks-rs Logic - Freeze": logic "Ownership Strategy".
-    // If prepare_staging detected root needed, we might need sudo.
-    // But currently prepare_staging only sets Metadata.privilege_mode.
-    // Assuming we run `unshare` as current user. 
-    // If privilege_mode is Root, it implies we successfully read files?
-    // Wait, if files are not readable by user, prepare_staging (which does FileEntry::from_path -> metadata) might fail if it can't read metadata?
-    // User can usually read metadata of other users' files if dir is executable.
-    
     let args = vec![
         "-m", "-U", "-r", "--propagation", "private",
         "sh", script_path.to_str().unwrap()
@@ -639,6 +622,7 @@ pub fn freeze<E: CommandExecutor>(
 fn generate_freeze_script(
     manifest: &Manifest,
     build_dir: &Path,
+    payload_name: &str,
     options: &FreezeOptions,
 ) -> Result<String> {
     let mut script = String::new();
@@ -651,7 +635,7 @@ fn generate_freeze_script(
         // Wait, restore_path is parent dir. So full path is restore_path/name.
         if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
              let src = Path::new(parent).join(name);
-             let dest = build_dir.join("payload").join("to_restore").join(entry.id.to_string()).join(name);
+             let dest = build_dir.join(payload_name).join("to_restore").join(entry.id.to_string()).join(name);
              
              // Escape paths? Ideally use safe quoting. 
              // Using debug format {:?} adds quotes but might not be sh-safe.
@@ -681,7 +665,7 @@ fn generate_freeze_script(
     }
 
     // IMPORTANT: Point squash_manager to the PAYLOAD directory, not the build root
-    let input_dir = build_dir.join("payload");
+    let input_dir = build_dir.join(payload_name);
 
     let progress_flag = match options.progress_mode {
         ProgressMode::None => "--no-progress",
@@ -710,14 +694,6 @@ mod tests {
     fn test_prepare_staging() {
         // Mock XDG_CACHE_HOME by setting environment variable
         let temp_cache = tempdir().unwrap();
-        // Since get_cache_dir checks env var, we need to set it.
-        // Tests run in threads, setting env var might race if parallel.
-        // cargo test runs parallel by default.
-        // We can use a mutex or `rusty-fork`? Or valid logic.
-        // Or just rely on typical behavior. This test might be flaky if other tests use XDG_CACHE_HOME.
-        // For now, let's assume it's fine or run single-threaded if needed.
-        // Better: Make prepare_staging accept cache_dir override? No, stick to env.
-        // We can create a dedicated test function that sets it and unsets it (using serial test logic).
         
         // Since we are adding ONLY this test to this file, it's fine.
         unsafe { std::env::set_var("XDG_CACHE_HOME", temp_cache.path()); }
@@ -730,10 +706,13 @@ mod tests {
         
         let targets = vec![file_target.clone(), dir_target.clone()];
         
-        let (build_dir, _lock) = prepare_staging(&targets).unwrap();
+        // Return tuple now includes payload_name
+        let (build_dir, payload_name, _lock) = prepare_staging(&targets).unwrap();
+        
+        assert_eq!(payload_name, "data.txt"); // Name of first target
         
         assert!(build_dir.exists());
-        let payload_dir = build_dir.join("payload");
+        let payload_dir = build_dir.join(&payload_name);
         assert!(payload_dir.exists());
         assert!(payload_dir.join("list.yaml").exists());
         assert!(payload_dir.join("to_restore").exists());
@@ -782,10 +761,13 @@ mod tests {
             compression: None,
         };
         
-        let script = generate_freeze_script(&manifest, &build_dir, &options).unwrap();
+        let payload_name = "test_payload";
+        let script = generate_freeze_script(&manifest, &build_dir, payload_name, &options).unwrap();
         
         assert!(script.contains("mount --bind \"/src/dir1/file1\""));
+        assert!(script.contains(&format!("build/test_payload/to_restore/1/file1")));
         assert!(script.contains("squash_manager-rs create"));
+        assert!(script.contains("build/test_payload"));
         assert!(script.contains("--no-progress"));
     }
     
