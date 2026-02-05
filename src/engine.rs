@@ -7,6 +7,7 @@ use std::fs;
 use fs2::FileExt; // For flock
 // rand is in Cargo.toml
 use tempfile;
+use log::{warn, info};
 
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
@@ -128,9 +129,9 @@ pub fn try_gc_staging() -> Result<()> {
                                 // If we hold lock, other GCs fail try_lock.
                                 // So we are safe.
                                 if let Err(e) = fs::remove_dir_all(&path) {
-                                    eprintln!("GC: Failed to remove {:?}: {}", path, e);
+                                    warn!("GC: Failed to remove {:?}: {}", path, e);
                                 } else {
-                                    // println!("GC: Removed staged dir {:?}", path);
+                                    info!("GC: Removed stale staging dir {:?}", path);
                                 }
                             }
                         }
@@ -203,8 +204,8 @@ pub fn check<E: CommandExecutor>(
     
     let status = executor.run_interactive("squash_manager-rs", &[
         "mount",
-        archive_path.to_str().unwrap(),
-        mount_point.to_str().unwrap()
+        archive_path.to_str().ok_or(anyhow!("Invalid archive path encoding"))?,
+        mount_point.to_str().ok_or(anyhow!("Invalid mount point path encoding"))?
     ])?;
     
     if !status.success() {
@@ -215,7 +216,9 @@ pub fn check<E: CommandExecutor>(
     struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
-             let _ = self.0.run("squash_manager-rs", &["umount", self.1.to_str().unwrap()]);
+             if let Some(s) = self.1.to_str() {
+                 let _ = self.0.run("squash_manager-rs", &["umount", s]);
+             }
         }
     }
     let _guard = UnmountGuard(executor, mount_point);
@@ -469,8 +472,8 @@ pub fn unfreeze<E: CommandExecutor>(
     // 2. Mount Archive
     let status = executor.run_interactive("squash_manager-rs", &[
         "mount", 
-        archive_path.to_str().unwrap(), 
-        mount_point.to_str().unwrap()
+        archive_path.to_str().ok_or(anyhow!("Invalid archive path encoding"))?, 
+        mount_point.to_str().ok_or(anyhow!("Invalid mount point path encoding"))?
     ])?;
 
     if !status.success() {
@@ -481,7 +484,9 @@ pub fn unfreeze<E: CommandExecutor>(
     struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
-             let _ = self.0.run("squash_manager-rs", &["umount", self.1.to_str().unwrap()]);
+             if let Some(s) = self.1.to_str() {
+                 let _ = self.0.run("squash_manager-rs", &["umount", s]);
+             }
         }
     }
     let _guard = UnmountGuard(executor, mount_point);
@@ -558,7 +563,7 @@ fn restore_from_mount<E: CommandExecutor>(
              if let Err(_) = fs::create_dir_all(&restore_parent) {
                   // Fallback to sudo mkdir -p
                   if let Some(runner) = utils::check_root_or_get_runner("Parent directory creation requires root")? {
-                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().unwrap()])?;
+                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().ok_or(anyhow!("Invalid parent path"))?])?;
                        if !status.success() {
                            return Err(anyhow!("Failed to create directory {:?}", restore_parent));
                        }
@@ -568,10 +573,10 @@ fn restore_from_mount<E: CommandExecutor>(
              }
         }
 
-        let src_str = src_path.to_str().unwrap();
-        let dest_str = dest_path.to_str().unwrap();
+        let src_str = src_path.to_str().ok_or(anyhow!("Invalid source path encoding"))?;
+        let dest_str = dest_path.to_str().ok_or(anyhow!("Invalid dest path encoding"))?;
         
-        println!("Restoring {} -> {}", src_str, dest_str);
+        println!("Restoring {} -> {}", src_path.display(), dest_path.display());
 
         let mut final_src = src_str.to_string();
         if entry.entry_type == crate::manifest::EntryType::Directory {
@@ -622,9 +627,8 @@ pub fn freeze<E: CommandExecutor>(
     executor: &E,
 ) -> Result<()> {
     // 0. Auto-GC: Cleanup stale build directories (protected by flock)
-    if let Err(_e) = try_gc_staging() {
-        // Log but don't fail, maybe just debug print if we had logging
-        // eprintln!("GC Warning: {}", e); 
+    if let Err(e) = try_gc_staging() {
+        warn!("GC Error: {}", e); 
     }
 
     // 1. Prepare Staging
@@ -645,7 +649,7 @@ pub fn freeze<E: CommandExecutor>(
     // 4. Run unshare
     let args = vec![
         "-m", "-U", "-r", "--propagation", "private",
-        "sh", script_path.to_str().unwrap()
+        "sh", script_path.to_str().ok_or(anyhow!("Invalid script path"))?
     ];
     
     let status = executor.run_interactive("unshare", &args)?;
@@ -656,8 +660,7 @@ pub fn freeze<E: CommandExecutor>(
     
     // Cleanup Staging Area
     if let Err(e) = std::fs::remove_dir_all(&build_dir) {
-        // Use eprintln for now as we don't have a logger setup
-        eprintln!("Warning: Failed to clean up staging directory {:?}: {}", build_dir, e);
+        warn!("Failed to clean up staging directory {:?}: {}", build_dir, e);
     }
     
     Ok(())

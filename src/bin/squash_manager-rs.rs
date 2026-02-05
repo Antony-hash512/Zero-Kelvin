@@ -8,7 +8,7 @@ use std::process;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
-use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
+use zero_kelvin_stazis::constants::{DEFAULT_ZSTD_COMPRESSION, LUKS_HEADER_SIZE, LUKS_SAFETY_BUFFER};
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 
 /// Global path for cleanup on interrupt (SIGINT/SIGTERM)
@@ -35,7 +35,16 @@ fn get_effective_root_cmd() -> Vec<String> {
          }
     }
 
-    // Default to sudo
+    // Auto-detect doas or run0 or sudo
+    let candidates = ["doas", "run0", "sudo"];
+    for candidate in &candidates {
+         // check if exists in path
+         if let Ok(path) = which::which(candidate) {
+             return vec![candidate.to_string()];
+         }
+    }
+
+    // Default to sudo if nothing found (legacy behavior)
     vec!["sudo".to_string()]
 }
 
@@ -250,7 +259,7 @@ pub enum Commands {
         vanilla_progress: bool,
 
         /// Use experimental custom progress bar (broken, for testing only)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         alfa_progress: bool,
 
         /// Overwrite files inside existing archive (Applies to both Plain and LUKS)
@@ -601,7 +610,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             if final_output.exists() {
                 let is_luks = is_luks_image(&final_output, executor);
                 // Check valid SquashFS signature (magic number)
-                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().unwrap()]) {
+                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().ok_or(anyhow!("Invalid path"))?]) {
                      String::from_utf8_lossy(&output.stdout).contains("Squashfs")
                 } else { false };
 
@@ -638,7 +647,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
                 // Determine raw size (now strictly for directories)
                 // du -sb
-                let raw_size_bytes = if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
+                let raw_size_bytes = if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().ok_or(anyhow!("Invalid input path"))?]) {
                     if output.status.success() {
                         let out_str = String::from_utf8_lossy(&output.stdout);
                         out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
@@ -667,8 +676,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let overhead_percent = fs_overhead;
                     
                     let overhead_bytes = (raw_size_bytes as f64 * (overhead_percent as f64 / 100.0)) as u64;
-                    let luks_header_bytes = 32 * 1024 * 1024; // 32MB for LUKS2 header
-                    let safety_buffer = 128 * 1024 * 1024; // 128MB safety buffer
+                    let luks_header_bytes = LUKS_HEADER_SIZE;
+                    let safety_buffer = LUKS_SAFETY_BUFFER;
                     
                     let unaligned_size = raw_size_bytes + overhead_bytes + luks_header_bytes + safety_buffer;
                     
@@ -767,7 +776,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Execute mksquashfs to mapper_path
                 let pack_result = {
                     let mut cmd_args = vec![
-                         input_path.to_str().unwrap().to_string(),
+                         input_path.to_str().ok_or(anyhow!("Invalid input path"))?.to_string(),
                          mapper_path.clone(),
                          "-no-recovery".to_string(),
                     ];
@@ -824,7 +833,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     } else if alfa_progress {
                         // EXPERIMENTAL: Custom progress bar - parse stdout for percentages (currently broken)
                         // Get directory size for display
-                        let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().unwrap()]) {
+                        let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().ok_or(anyhow!("Invalid input path"))?]) {
                             if du_output.status.success() {
                                 let out_str = String::from_utf8_lossy(&du_output.stdout);
                                 out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
@@ -1236,7 +1245,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         "-t".to_string(),
                         "squashfs".to_string(),
                         mapper_path.clone(),
-                        target_mount_point.to_str().unwrap().to_string(),
+                        target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?.to_string(),
                     ]);
                     
                     let prog = mount_args.remove(0);
@@ -1265,7 +1274,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 open_args.extend(vec![
                     "cryptsetup".to_string(),
                     "open".to_string(),
-                    image.to_str().unwrap().to_string(),
+                    image.to_str().ok_or(anyhow!("Invalid image path"))?.to_string(),
                     mapper_name.clone(),
                 ]);
                 
@@ -1286,7 +1295,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     "-t".to_string(),
                     "squashfs".to_string(),
                     mapper_path.clone(),
-                    target_mount_point.to_str().unwrap().to_string(),
+                    target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?.to_string(),
                 ]);
                 
                 let mount_prog = mount_args.remove(0);

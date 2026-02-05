@@ -147,6 +147,8 @@ use zero_kelvin_stazis::executor::RealSystem;
 use std::fs;
 
 fn main() -> Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
     let args_raw: Vec<String> = std::env::args().collect();
 
     // 1. No args -> Help + Exit 0
