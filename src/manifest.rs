@@ -8,6 +8,7 @@ use std::fs;
 pub enum EntryType {
     File,
     Directory,
+    Symlink,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -34,10 +35,17 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn from_path(id: u32, path: &Path) -> Result<Self> {
-        let metadata = fs::metadata(path).context(format!("Failed to get metadata for {:?}", path))?;
+    pub fn from_path(id: u32, path: &Path, follow_links: bool) -> Result<Self> {
+        // Use symlink_metadata to detect symlinks (don't follow them yet)
+        let metadata = if follow_links {
+            fs::metadata(path).context(format!("Failed to get metadata for {:?}", path))?
+        } else {
+            fs::symlink_metadata(path).context(format!("Failed to get metadata for {:?}", path))?
+        };
         
-        let entry_type = if metadata.is_dir() {
+        let entry_type = if metadata.is_symlink() {
+            EntryType::Symlink
+        } else if metadata.is_dir() {
             EntryType::Directory
         } else {
             EntryType::File
@@ -204,7 +212,7 @@ files: []
         let file_path = temp.path().join("my_file.txt");
         std::fs::File::create(&file_path).unwrap();
 
-        let entry = FileEntry::from_path(1, &file_path).unwrap();
+        let entry = FileEntry::from_path(1, &file_path, false).unwrap();
         assert_eq!(entry.id, 1);
         assert_eq!(entry.entry_type, EntryType::File);
         assert_eq!(entry.name.unwrap(), "my_file.txt");
@@ -218,7 +226,7 @@ files: []
         let dir_path = temp.path().join("my_dir");
         std::fs::create_dir(&dir_path).unwrap();
 
-        let entry = FileEntry::from_path(2, &dir_path).unwrap();
+        let entry = FileEntry::from_path(2, &dir_path, false).unwrap();
         assert_eq!(entry.id, 2);
         assert_eq!(entry.entry_type, EntryType::Directory);
         assert_eq!(entry.name.unwrap(), "my_dir");

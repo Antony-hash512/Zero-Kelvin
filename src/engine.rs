@@ -11,7 +11,7 @@ use tempfile;
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
-pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, String, std::fs::File)> {
+pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File)> {
     // 1. Resolve XDG_CACHE_HOME
     let cache_root = get_cache_dir()?;
     let app_cache = cache_root.join("zero-kelvin-stazis");
@@ -53,7 +53,7 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, String, std::fs:
     
     for (i, target) in targets.iter().enumerate() {
         let id = (i + 1) as u32;
-        let entry = FileEntry::from_path(id, target)?;
+        let entry = FileEntry::from_path(id, target, dereference)?;
         
         let container_dir = restore_root.join(id.to_string());
         fs::create_dir(&container_dir)?;
@@ -67,6 +67,10 @@ pub fn prepare_staging(targets: &[PathBuf]) -> Result<(PathBuf, String, std::fs:
             },
             crate::manifest::EntryType::File => {
                 fs::File::create(&stub_path)?;
+            },
+            crate::manifest::EntryType::Symlink => {
+                let link_target = fs::read_link(target).context("Failed to read symlink target")?;
+                std::os::unix::fs::symlink(&link_target, &stub_path)?;
             }
         }
         
@@ -175,6 +179,7 @@ pub struct FreezeOptions {
     pub overwrite_luks_content: bool,
     pub progress_mode: ProgressMode,
     pub compression: Option<u32>,
+    pub dereference: bool,
 }
 
 pub struct UnfreezeOptions {
@@ -234,6 +239,8 @@ pub fn check<E: CommandExecutor>(
     let mut stats_skipped = 0;
     let mut stats_files_deleted = 0;
     let mut stats_dirs_deleted = 0;
+    let mut stats_links_matched = 0;
+    let mut stats_links_deleted = 0;
 
     for entry in &manifest.files {
         // ... (Path resolution logic is same)
@@ -298,7 +305,8 @@ pub fn check<E: CommandExecutor>(
 
             // Check Type
             if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
-               live_meta.file_type().is_file() != mount_meta.file_type().is_file() { 
+               live_meta.file_type().is_file() != mount_meta.file_type().is_file() ||
+               live_meta.file_type().is_symlink() != mount_meta.file_type().is_symlink() { 
                 println!("MISMATCH (Type): {}", display_name);
                 stats_mismatch += 1;
                 continue;
@@ -329,11 +337,27 @@ pub fn check<E: CommandExecutor>(
                 continue;
             }
 
-            // Check Size
-            if live_meta.len() != mount_meta.len() {
-                 println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
-                 stats_mismatch += 1;
-                 continue;
+            if live_meta.is_symlink() {
+                // Check Target
+                let live_target = fs::read_link(&live_path);
+                let mount_target = fs::read_link(mount_path);
+                
+                if live_target.is_err() || mount_target.is_err() || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap() {
+                     println!("MISMATCH (Link Target): {} ({:?} vs {:?})", 
+                         display_name, live_target, mount_target);
+                     stats_mismatch += 1;
+                     continue;
+                }
+                
+                // If force_delete, falls through to generic removal logic below (remove_file works on links)
+                // But we need to update stat counter correctly, not as 'file'
+            } else {
+                // Check Size (Only for files, dirs/links size is metadata)
+                if live_meta.len() != mount_meta.len() {
+                     println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
+                     stats_mismatch += 1;
+                     continue;
+                }
             }
             
             // Deep Check
@@ -367,21 +391,29 @@ pub fn check<E: CommandExecutor>(
                  
                  if let Err(e) = fs::remove_file(&live_path) {
                       println!("ERROR: Failed to delete {}: {}", display_name, e);
-                 } else {
-                      println!("DELETED: {}", display_name);
-                      stats_files_deleted += 1;
-                 }
-            } else {
-                 println!("MATCH: {}", display_name);
-                 stats_files_matched += 1;
-            }
+                  } else {
+                       println!("DELETED: {}", display_name);
+                       if live_meta.is_symlink() {
+                           stats_links_deleted += 1;
+                       } else {
+                           stats_files_deleted += 1;
+                       }
+                  }
+             } else {
+                  println!("MATCH: {}", display_name);
+                  if live_meta.is_symlink() {
+                      stats_links_matched += 1;
+                  } else {
+                      stats_files_matched += 1;
+                  }
+             }
         }
     }
     
     println!("---------------------------------------------------");
     println!("Indexed Paths: {}", manifest.files.len());
-    println!("Files Matched: {}, Dirs Matched: {}", stats_files_matched, stats_dirs_matched);
-    println!("Files Deleted: {}, Dirs Deleted: {}", stats_files_deleted, stats_dirs_deleted);
+    println!("Files Matched: {}, Dirs Matched: {}, Links Matched: {}", stats_files_matched, stats_dirs_matched, stats_links_matched);
+    println!("Files Deleted: {}, Dirs Deleted: {}, Links Deleted: {}", stats_files_deleted, stats_dirs_deleted, stats_links_deleted);
     println!("Mismatched: {}, Missing: {}, Skipped (Newer): {}", 
              stats_mismatch, stats_missing, stats_skipped);
     
@@ -585,7 +617,7 @@ pub fn freeze<E: CommandExecutor>(
 
     // 1. Prepare Staging
     // _lock must be kept in scope to maintain the flock until we are done (or until cleanup)
-    let (build_dir, payload_name, _lock) = prepare_staging(targets)?;
+    let (build_dir, payload_name, _lock) = prepare_staging(targets, options.dereference)?;
     
     // 2. Read Manifest
     let payload_dir = build_dir.join(&payload_name);
@@ -631,6 +663,9 @@ fn generate_freeze_script(
     
     // Bind mounts
     for entry in &manifest.files {
+        if entry.entry_type == crate::manifest::EntryType::Symlink {
+            continue; // Already staged as symlink, no bind mount needed
+        }
         // Source: restore_path/name
         // Wait, restore_path is parent dir. So full path is restore_path/name.
         if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
@@ -707,7 +742,7 @@ mod tests {
         let targets = vec![file_target.clone(), dir_target.clone()];
         
         // Return tuple now includes payload_name
-        let (build_dir, payload_name, _lock) = prepare_staging(&targets).unwrap();
+        let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
         
         assert_eq!(payload_name, "data.txt"); // Name of first target
         
@@ -731,6 +766,46 @@ mod tests {
         let manifest_content = fs::read_to_string(payload_dir.join("list.yaml")).unwrap();
         assert!(manifest_content.contains("data.txt"));
         assert!(manifest_content.contains("config"));
+    }
+
+    #[test]
+    fn test_prepare_staging_symlinks() {
+        use std::os::unix::fs::symlink;
+         // Mock XDG_CACHE_HOME by setting environment variable
+        let temp_cache = tempdir().unwrap();
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp_cache.path()); }
+        
+        let target_dir = tempdir().unwrap();
+        let target_file = target_dir.path().join("real_file");
+        fs::write(&target_file, "real content").unwrap();
+        
+        let symlink_path = target_dir.path().join("my_link");
+        symlink(&target_file, &symlink_path).unwrap();
+        
+        // Test 1: No Dereference (default) -> Should preserve symlink
+        let targets = vec![symlink_path.clone()];
+        let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
+        
+        let payload_dir = build_dir.join(&payload_name);
+        let link_in_staging = payload_dir.join("to_restore/1/my_link");
+        
+        assert!(link_in_staging.exists() || link_in_staging.is_symlink()); // is_symlink is sufficient check
+        assert!(fs::symlink_metadata(&link_in_staging).unwrap().is_symlink());
+        
+        let target = fs::read_link(&link_in_staging).unwrap();
+        assert_eq!(target, target_file); // Should point to original target absolute path
+        
+        // Clean up lock to allow GC (not critical for test but good practice)
+        drop(_lock);
+
+        // Test 2: Dereference -> Should be a file stub
+        let (build_dir_2, payload_name_2, _lock_2) = prepare_staging(&targets, true).unwrap();
+        let payload_dir_2 = build_dir_2.join(&payload_name_2);
+        let stub_in_staging = payload_dir_2.join("to_restore/1/my_link");
+        
+        assert!(stub_in_staging.exists());
+        assert!(fs::metadata(&stub_in_staging).unwrap().is_file()); // It's a file stub now
+        assert!(!fs::symlink_metadata(&stub_in_staging).unwrap().is_symlink());
     }
 
     #[test]
@@ -759,6 +834,7 @@ mod tests {
             overwrite_luks_content: false,
             progress_mode: ProgressMode::None,
             compression: None,
+            dereference: false,
         };
         
         let payload_name = "test_payload";

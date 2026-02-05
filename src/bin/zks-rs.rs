@@ -105,6 +105,10 @@ pub enum Commands {
         /// Zstd compression level (0 = none, default: see help)
         #[arg(short = 'c', long, value_name = "LEVEL")]
         compression: Option<u32>,
+
+        /// Dereference symlinks (store their content instead of the link)
+        #[arg(short = 'L', long)]
+        dereference: bool,
     },
     /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
@@ -203,6 +207,7 @@ fn main() -> Result<()> {
             vanilla_progress: _vanilla_progress,
             alfa_progress,
             compression,
+            dereference,
         } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
             let executor = RealSystem;
@@ -223,6 +228,7 @@ fn main() -> Result<()> {
                 overwrite_luks_content,
                 progress_mode,
                 compression,
+                dereference,
             };
             
             // Log info
@@ -328,6 +334,7 @@ mod tests {
                 vanilla_progress,
                 alfa_progress,
                 compression,
+                dereference,
             } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
@@ -339,6 +346,7 @@ mod tests {
                 assert!(!vanilla_progress); // not passed
                 assert!(!alfa_progress); // not passed
                 assert_eq!(compression, Some(19));
+                assert!(!dereference);
             }
             _ => panic!("Expected Freeze command"),
         }
