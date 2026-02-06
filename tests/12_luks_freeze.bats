@@ -77,6 +77,10 @@ teardown() {
     run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e \"$SRC\" \"$TEST_DIR\""
     assert_success
 
+    # Check that a .sqfs file was created inside TEST_DIR
+    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs_luks.img"
+    assert_line --index 0 --partial ".sqfs_luks.img"
+
     # 1. Find ANY file created in that dir (ignoring extension)
     # We expect exactly one file to be created
     run find "$TEST_DIR" -maxdepth 1 -type f

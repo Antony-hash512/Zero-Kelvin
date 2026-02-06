@@ -47,6 +47,13 @@ teardown() {
     run $ZKS_BIN freeze "$SRC" "$TEST_DIR"
     assert_success
 
+    # Check that a .sqfs file was created inside TEST_DIR
+    # проверяем и тип файла и расширение т.к.
+    # имя файла вместе с раширением автогенерируется
+    # прогой, а не произвольно задаётся пользователем
+    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs"
+    assert_line --index 0 --partial ".sqfs"
+
     # 1. Find ANY file created in that dir
     run find "$TEST_DIR" -maxdepth 1 -type f
     assert_line --index 0 --partial "$TEST_DIR"
