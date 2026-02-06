@@ -77,9 +77,15 @@ teardown() {
     run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e \"$SRC\" \"$TEST_DIR\""
     assert_success
 
-    # Check that a .sqfs file was created inside TEST_DIR
-    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs"
-    assert_line --index 0 --partial ".sqfs"
+    # 1. Find ANY file created in that dir (ignoring extension)
+    # We expect exactly one file to be created
+    run find "$TEST_DIR" -maxdepth 1 -type f
+    assert_line --index 0 --partial "$TEST_DIR"
+    local created_file="${lines[0]}"
+
+    # 2. Verify it is a LUKS container using 'file' utility
+    run file "$created_file"
+    assert_output --partial "LUKS encrypted file"
 }
 
 @test "LUKS Freeze: Using -r (read from file)" {
