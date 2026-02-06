@@ -119,3 +119,5 @@ and run_colored_bats tests/08_unfreeze.bats
 and run_colored_bats tests/09_check.bats
 
 and run_colored_bats tests/10_privilege.bats
+
+and run_colored_bats tests/11_fullcycle.bats
