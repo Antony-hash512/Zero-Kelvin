@@ -37,13 +37,20 @@ pub struct FileEntry {
 
 impl FileEntry {
     pub fn from_path(id: u32, path: &Path, follow_links: bool) -> Result<Self, ZksError> {
+        // Make path absolute without resolving symlinks (canonicalize would resolve them)
+        let abs_path = if path.is_relative() {
+            std::env::current_dir().map_err(ZksError::IoError)?.join(path)
+        } else {
+            path.to_path_buf()
+        };
+
         // Use symlink_metadata to detect symlinks (don't follow them yet)
         let metadata = if follow_links {
-            fs::metadata(path).map_err(ZksError::IoError)?
+            fs::metadata(&abs_path).map_err(ZksError::IoError)?
         } else {
-            fs::symlink_metadata(path).map_err(ZksError::IoError)?
+            fs::symlink_metadata(&abs_path).map_err(ZksError::IoError)?
         };
-        
+
         let entry_type = if metadata.is_symlink() {
             EntryType::Symlink
         } else if metadata.is_dir() {
@@ -52,12 +59,12 @@ impl FileEntry {
             EntryType::File
         };
 
-        let name = path.file_name()
+        let name = abs_path.file_name()
             .ok_or_else(|| ZksError::InvalidPath(path.to_path_buf()))?
             .to_string_lossy()
             .into_owned();
 
-        let restore_path = path.parent()
+        let restore_path = abs_path.parent()
             .ok_or_else(|| ZksError::InvalidPath(path.to_path_buf()))?
             .to_string_lossy()
             .into_owned();

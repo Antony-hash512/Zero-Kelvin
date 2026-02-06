@@ -163,6 +163,14 @@ teardown() {
     run $ZKS_BIN freeze "src" "out_rel.sqfs"
     assert_success
     [ -f "out_rel.sqfs" ]
+
+    # Verify restore_path is not empty (regression test for relative path bug)
+    if command -v unsquashfs >/dev/null; then
+        run unsquashfs -cat "out_rel.sqfs" list.yaml
+        assert_success
+        refute_output --partial "restore_path: ''"
+        assert_output --partial "restore_path:"
+    fi
     popd
 
     # Dot Target

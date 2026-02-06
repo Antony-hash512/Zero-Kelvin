@@ -138,6 +138,23 @@ teardown() {
     assert_output --partial "name: src"
 }
 
+@test "LUKS Freeze: Relative paths produce valid restore_path in manifest" {
+    pushd "$TEST_DIR"
+    run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e src \"$TEST_DIR/rel_test.sqfs\" --no-progress"
+    assert_success
+    popd
+
+    # Mount to verify list.yaml
+    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_SQM_BIN\" mount \"$TEST_DIR/rel_test.sqfs\" \"$MOUNT_POINT\""
+    assert_success
+
+    run cat "$MOUNT_POINT/list.yaml"
+    # restore_path MUST NOT be empty (regression test for relative path bug)
+    refute_output --partial "restore_path: ''"
+    assert_output --partial "restore_path:"
+    assert_output --partial "name: src"
+}
+
 @test "LUKS Freeze: Advanced Content (Symlinks, Empty Dirs, Special Chars)" {
     ADV_SRC="$TEST_DIR/advanced"
     mkdir -p "$ADV_SRC"
