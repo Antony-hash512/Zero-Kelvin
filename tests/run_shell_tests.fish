@@ -122,3 +122,9 @@ and run_colored_bats tests/10_privilege.bats
 
 and run_colored_bats tests/11_fullcycle.bats
 
+# LUKS Tests (Root only)
+and run_colored_bats tests/12_luks_freeze.bats
+and run_colored_bats tests/13_luks_cleaning.bats
+and run_colored_bats tests/14_luks_unfreeze.bats
+and run_colored_bats tests/15_luks_check.bats
+and run_colored_bats tests/16_luks_fullcycle.bats
