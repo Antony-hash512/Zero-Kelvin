@@ -66,17 +66,17 @@ teardown() {
     [ "$status" -eq 0 ]
     
     # 3. Проверяем сообщение в output
-    # <No mount point specified. Using auto-generated path: <имя каталога>
+    # <No mount point specified. Using secure local path for stability: <имя каталога>
     # Используем partial matching, так как путь полный
-    [[ "$output" == *"No mount point specified. Using auto-generated path:"* ]]
+    [[ "$output" == *"No mount point specified. Using secure local path for stability:"* ]]
     
     # 4. Парсим "хвост"
-    local generated_path=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local generated_path=$(echo "$output" | grep "Using secure local path for stability:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
     
-    # 5. Проверяем формат имени: <префикс>_<unix-время>_<случайное_число, 6 цифр>
+    # 5. Проверяем формат имени: mount_<префикс>_<unix-время>_<случайное_число, 6 цифр>
     # Префикс = golden.sqfs
     local dirname=$(basename "$generated_path")
-    local prefix="golden.sqfs"
+    local prefix="mount_golden.sqfs"
     
     # Проверка префикса
     [[ "$dirname" == "$prefix"* ]]
@@ -112,12 +112,12 @@ teardown() {
     # 1. Первый запуск
     run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE"
     [ "$status" -eq 0 ]
-    local path1=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local path1=$(echo "$output" | grep "Using secure local path for stability:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
     
     # 2. Второй запуск сразу же
     run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE"
     [ "$status" -eq 0 ]
-    local path2=$(echo "$output" | grep "Using auto-generated path:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local path2=$(echo "$output" | grep "Using secure local path for stability:" | awk -F': ' '{print $2}' | tr -d '[:space:]')
     
     # 3. Проверяем что пути разные
     [ "$path1" != "$path2" ]
