@@ -399,11 +399,16 @@ fn check_item(
          let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
              .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
          
-         if live_mtime > archive_mtime {
-              println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
-              *stats_skipped += 1;
-              return Ok(());
-         }
+          // Safety Gate: Do not delete if Live file is NEWER than Archive
+          // Exception: If use_cmp is enabled, we verified content is identical. 
+          // So even if mtime is newer (e.g. touched), data is safe to delete (it is backed up).
+          if !options.use_cmp {
+              if live_mtime > archive_mtime {
+                   println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
+                   *stats_skipped += 1;
+                   return Ok(());
+              }
+          }
          
          if let Err(e) = fs::remove_file(live_path) {
               println!("ERROR: Failed to delete {}: {}", display_name, e);
@@ -647,10 +652,12 @@ pub fn freeze<E: CommandExecutor>(
         "sh", script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?
     ];
     
-    let status = executor.run_interactive("unshare", &args).map_err(|e| ZksError::OperationFailed(format!("Failed to execute unshare: {}", e)))?;
+    // Use run_and_capture_error to get stderr for friendly messages
+    let (status, stderr) = executor.run_and_capture_error("unshare", &args)
+        .map_err(|e| ZksError::OperationFailed(format!("Failed to execute unshare: {}", e)))?;
     
     if !status.success() {
-         return Err(ZksError::OperationFailed("Freeze process failed".into()));
+         return Err(ZksError::OperationFailed(format!("Freeze process failed: {}", stderr)));
     }
     
     // Cleanup Staging Area

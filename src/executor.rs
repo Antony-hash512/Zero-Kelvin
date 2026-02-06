@@ -14,7 +14,14 @@ pub trait CommandExecutor {
     fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;
 
     /// Runs a command interactively (inherits stdio).
+    /// Runs a command interactively (inherits stdio).
+    /// Note: Cannot capture stderr for friendly error messages easily while inheriting.
+    /// To support friendly errors, we might need a mode that pipes stderr but streams stdout.
     fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<std::process::ExitStatus>;
+
+    /// Runs a command, piping stdout/stderr to parent but CAPTURING stderr if it fails.
+    /// Returns (ExitStatus, Option<StderrString>)
+    fn run_and_capture_error<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<(std::process::ExitStatus, String)>;
 
     /// Runs a command while monitoring output file size for progress.
     /// Updates the progress bar with the current size of the output file.
@@ -54,6 +61,61 @@ impl CommandExecutor for RealSystem {
             .args(args)
             .status()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute interactive command: {} {:?}: {}", program, args, e)))
+    }
+
+    fn run_and_capture_error<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<(std::process::ExitStatus, String)> {
+        // We want user to see output LIVE. 
+        // But we also want to capture stderr if it fails.
+        // Tapping into the stream is hard without complex threading.
+        // 
+        // Compromise: Use `Output` capture if we suspect it might fail? No, interactive commands like LUKS need stdin/stdout.
+        //
+        // If we strictly need to catch "Incorrect password" from cryptsetup, it prints to stderr.
+        // If we redirect stderr to Pipe, we hide it from user (unless we reprint).
+        
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::inherit())  // Allow password input
+            .stdout(Stdio::inherit()) // Show progress
+            .stderr(Stdio::piped())   // Capture stderr
+            .spawn()?;
+
+        let stderr_pipe = child.stderr.take().unwrap();
+        
+        // We need to read stderr in a thread or loop to avoid blocking? 
+        // Or just read to string since stderr volume is usually low for prompts?
+        // But if we block reading stderr, we might block the process if it writes too much.
+        // Better: Use a thread to tee stderr to user + string.
+        
+        let (tx, rx) = std::sync::mpsc::channel();
+        
+        let t = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut reader = BufReader::new(stderr_pipe);
+            let mut buffer = [0; 1024];
+            let mut captured = Vec::new();
+            
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        let chunk = &buffer[0..n];
+                        // Passthrough to real stderr
+                        let _ = std::io::stderr().write_all(chunk);
+                        captured.extend_from_slice(chunk);
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(captured);
+        });
+
+        let status = child.wait()?;
+        let _ = t.join(); // Wait for thread
+        let captured_bytes = rx.recv().unwrap_or_default();
+        let captured_string = String::from_utf8_lossy(&captured_bytes).to_string();
+        
+        Ok((status, captured_string))
     }
 
     fn run_with_file_progress<'a>(

@@ -121,3 +121,6 @@ and run_colored_bats tests/09_check.bats
 and run_colored_bats tests/10_privilege.bats
 
 and run_colored_bats tests/11_fullcycle.bats
+
+and run_colored_bats tests/12-custom-errors.bats
+

@@ -1623,6 +1623,7 @@ mod tests {
                 args: &[&'a str],
                 progress_bar: &indicatif::ProgressBar,
             ) -> std::io::Result<Output>;
+            fn run_and_capture_error<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<(std::process::ExitStatus, String)>;
         }
     }
 
