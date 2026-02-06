@@ -12,14 +12,15 @@ setup() {
     
     # Ensure ZKS_BIN is set; fallback to local debug build if not
     if [ -z "$ZKS_BIN" ]; then
-        # Assume running from project root or tests dir
+        # Assume running from project root
         if [ -f "./target/debug/zks-rs" ]; then
-            export ZKS_BIN="./target/debug/zks-rs"
+            export ZKS_BIN="$(pwd)/target/debug/zks-rs"
         elif [ -f "../target/debug/zks-rs" ]; then
-            export ZKS_BIN="../target/debug/zks-rs"
+            export ZKS_BIN="$(readlink -f ../target/debug/zks-rs)"
         else
-            # Try to locate
-             export ZKS_BIN="$(git rev-parse --show-toplevel)/target/debug/zks-rs"
+             # Try to locate
+             ROOT_DIR="$(git rev-parse --show-toplevel)"
+             export ZKS_BIN="$ROOT_DIR/target/debug/zks-rs"
         fi
     fi
     
@@ -75,7 +76,7 @@ teardown() {
     assert_failure
     # Expect error from prepare_staging or main
     # "Failed to get metadata" or "No targets"
-    assert_output --partial "Failed"
+    assert_output --partial "Error"
 }
 
 # --- Phase 6.5: Comprehensive Testing ---
@@ -96,7 +97,11 @@ teardown() {
     # Verify Metadata
     assert_output --partial "host:"
     assert_output --partial "date:"
-    assert_output --partial "privilege_mode: user"
+    if [ "$(id -u)" -eq 0 ]; then
+        assert_output --partial "privilege_mode: root"
+    else
+        assert_output --partial "privilege_mode: user"
+    fi
     
     # Verify File Entry
     assert_output --partial "name: src"

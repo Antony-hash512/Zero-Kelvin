@@ -140,14 +140,22 @@ pub enum Commands {
     },
 }
 
-use anyhow::{Result, anyhow, Context};
+use zero_kelvin_stazis::error::ZksError;
 use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::RealSystem;
 use std::fs;
 
-fn main() -> Result<()> {
+fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    
+    if let Err(e) = run_app() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run_app() -> Result<(), ZksError> {
 
     let args_raw: Vec<String> = std::env::args().collect();
 
@@ -262,7 +270,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Result<(Vec<PathBuf>, PathBuf)> {
+fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Result<(Vec<PathBuf>, PathBuf), ZksError> {
     // Logic: 
     // Last argument is Output Path (Archive).
     // Preceding arguments are Targets.
@@ -270,7 +278,7 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
     
     // 1. Determine Output Path
     if args.is_empty() {
-        return Err(anyhow!("Destination archive path is required"));
+        return Err(ZksError::MissingTarget("Destination archive path is required".into()));
     }
     
     let output_path = args.pop().unwrap(); // Last one
@@ -281,7 +289,7 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
     // 3. Read from file if provided
     if let Some(path) = read_file {
         let content = fs::read_to_string(&path)
-            .context(format!("Failed to read target list file {:?}", path))?;
+            .map_err(|e| ZksError::IoError(e))?;
             
         for line in content.lines() {
             let trimmed = line.trim();
@@ -294,7 +302,7 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
     }
     
     if targets.is_empty() {
-        return Err(anyhow!("No targets specified to freeze"));
+        return Err(ZksError::MissingTarget("No targets specified to freeze".into()));
     }
     
     // 4. Handle Output Directory case

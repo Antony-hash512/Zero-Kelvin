@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use anyhow::{Result, Context, anyhow};
 use crate::executor::CommandExecutor;
 use crate::manifest::{Manifest, Metadata, FileEntry, PrivilegeMode};
 use crate::error::ZksError;
@@ -15,13 +14,13 @@ use log::{warn, info};
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
 pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File), ZksError> {
     // 1. Resolve Staging Root: /tmp/stazis-<uid>
-    let staging_root = utils::get_stazis_temp_dir().map_err(ZksError::Unknown)?;
+    let staging_root = utils::get_stazis_temp_dir()?;
 
 
     // 2. Create unique build directory: /tmp/stazis-<uid>/build_<timestamp>_<random>
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ZksError::Unknown(anyhow!(e)))?
+        .map_err(|e| ZksError::OperationFailed(format!("Time error: {}", e)))?
         .as_secs();
     let random_id: u32 = rand::random();
     let build_dir_name = format!("build_{}_{}", timestamp, random_id);
@@ -31,8 +30,8 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
 
     // 2.1 Create and Lock .lock file
     let lock_path = build_dir.join(".lock");
-    let lock_file = fs::File::create(&lock_path).context("Failed to create .lock file")?;
-    lock_file.lock_exclusive().context("Failed to acquire exclusive lock on staging directory")?;
+    let lock_file = fs::File::create(&lock_path).map_err(|e| ZksError::StagingError(format!("Failed to create .lock file: {}", e)))?;
+    lock_file.lock_exclusive().map_err(|e| ZksError::StagingError(format!("Failed to acquire exclusive lock on staging directory: {}", e)))?;
 
     // 2.5 Create payload directory with meaningful name
     // Use the first target's name as the payload directory name.
@@ -45,11 +44,11 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
         .to_string();
 
     let payload_dir = build_dir.join(&payload_name);
-    fs::create_dir(&payload_dir).context("Failed to create payload directory")?;
+    fs::create_dir(&payload_dir).map_err(|e| ZksError::StagingError(format!("Failed to create payload directory: {}", e)))?;
     
     // 3. Create 'to_restore' directory INSIDE payload
     let restore_root = payload_dir.join("to_restore");
-    fs::create_dir(&restore_root).context("Failed to create to_restore directory")?;
+    fs::create_dir(&restore_root).map_err(|e| ZksError::StagingError(format!("Failed to create to_restore directory: {}", e)))?;
     
     // 4. Generate Files list and create stubs
     let mut file_entries = Vec::new();
@@ -72,7 +71,7 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
                 fs::File::create(&stub_path)?;
             },
             crate::manifest::EntryType::Symlink => {
-                let link_target = fs::read_link(target).context("Failed to read symlink target")?;
+                let link_target = fs::read_link(target).map_err(|e| ZksError::IoError(e))?;
                 std::os::unix::fs::symlink(&link_target, &stub_path)?;
             }
         }
@@ -99,7 +98,7 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
 /// Iterates over subdirectories in the cache. Tries to acquire non-blocking exclusive lock on .lock.
 /// If successful, it means the process is dead, so we delete the directory.
 pub fn try_gc_staging() -> Result<(), ZksError> {
-    let staging_root = utils::get_stazis_temp_dir_path().map_err(ZksError::Unknown)?;
+    let staging_root = utils::get_stazis_temp_dir_path()?;
     
     if !staging_root.exists() {
         return Ok(());
@@ -150,12 +149,12 @@ pub fn try_gc_staging() -> Result<(), ZksError> {
 
 
 
-fn get_hostname() -> Result<String> {
+fn get_hostname() -> Result<String, ZksError> {
     std::process::Command::new("uname")
         .arg("-n")
         .output()
-        .context("Failed to run uname")
-        .and_then(|o| String::from_utf8(o.stdout).context("Invalid utf8 from uname"))
+        .map_err(|e| ZksError::OperationFailed(format!("Failed to run uname: {}", e)))
+        .and_then(|o| String::from_utf8(o.stdout).map_err(|e| ZksError::OperationFailed(format!("Invalid utf8 from uname: {}", e))))
         .map(|s| s.trim().to_string())
 }
 
@@ -192,14 +191,14 @@ pub fn check<E: CommandExecutor>(
     executor: &E,
 ) -> Result<(), ZksError> {
     // 1. Mount Archive
-    let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
+    let mount_dir = tempfile::tempdir().map_err(|e| ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e)))?;
     let mount_point = mount_dir.path();
     
     let status = executor.run_interactive("squash_manager-rs", &[
         "mount",
         archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?,
         mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
-    ]).map_err(ZksError::Unknown)?;
+    ]).map_err(|e| ZksError::OperationFailed(format!("Failed to execute mount command: {}", e)))?;
     
     if !status.success() {
         return Err(ZksError::OperationFailed("Failed to mount archive".into()));
@@ -223,7 +222,7 @@ pub fn check<E: CommandExecutor>(
     }
     let f = fs::File::open(&manifest_path).map_err(ZksError::IoError)?;
     let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZksError::ManifestError)?;
-    manifest.validate().map_err(ZksError::Unknown)?;
+    manifest.validate()?;
     
     // 3. Perform Check
     println!("Checking {} files from archive...", manifest.files.len());
@@ -459,7 +458,7 @@ pub fn unfreeze<E: CommandExecutor>(
     executor: &E,
 ) -> Result<(), ZksError> {
     // 1. Create temporary mount point
-    let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
+    let mount_dir = tempfile::tempdir().map_err(|e| ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e)))?;
     let mount_point = mount_dir.path();
 
     // 2. Mount Archive
@@ -467,7 +466,7 @@ pub fn unfreeze<E: CommandExecutor>(
         "mount", 
         archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?, 
         mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
-    ]).map_err(ZksError::Unknown)?;
+    ]).map_err(|e| ZksError::OperationFailed(format!("Failed to execute mount command: {}", e)))?;
 
     if !status.success() {
         return Err(ZksError::OperationFailed("Failed to mount archive".into()));
@@ -591,7 +590,7 @@ fn restore_from_mount<E: CommandExecutor>(
              true
         };
         
-        if need_sudo || manifest.metadata.privilege_mode == Some(PrivilegeMode::Root) {
+        if need_sudo || (manifest.metadata.privilege_mode == Some(PrivilegeMode::Root) && !utils::is_root().unwrap_or(false)) {
              if let Some(runner) = utils::check_root_or_get_runner("Restoration requires elevated privileges")? {
                   println!("Retrying with {}", runner);
                   
@@ -645,7 +644,7 @@ pub fn freeze<E: CommandExecutor>(
         "sh", script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?
     ];
     
-    let status = executor.run_interactive("unshare", &args).map_err(ZksError::Unknown)?;
+    let status = executor.run_interactive("unshare", &args).map_err(|e| ZksError::OperationFailed(format!("Failed to execute unshare: {}", e)))?;
     
     if !status.success() {
          return Err(ZksError::OperationFailed("Freeze process failed".into()));

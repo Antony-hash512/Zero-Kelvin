@@ -1,4 +1,3 @@
-use anyhow::{Result, Context, bail};
 use std::path::{Path, PathBuf};
 use std::fs;
 use clap::Parser;
@@ -11,7 +10,7 @@ struct Args {
     path: PathBuf,
 }
 
-fn main() -> Result<()> {
+fn main() -> std::io::Result<()> {
     let args = Args::parse();
     
     // Safety check: basic sanity check
@@ -27,9 +26,9 @@ fn main() -> Result<()> {
         Ok(_) => {
             // All clear.
             if args.path.is_file() {
-                 fs::remove_file(&args.path).context("Failed to remove file")?;
+                 fs::remove_file(&args.path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to remove file: {}", e)))?;
             } else {
-                 fs::remove_dir_all(&args.path).context("Failed to remove directory tree")?;
+                 fs::remove_dir_all(&args.path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to remove directory tree: {}", e)))?;
             }
             // println!("Removed: {:?}", args.path); // Quiet by default? Or log?
         },
@@ -45,16 +44,16 @@ fn main() -> Result<()> {
 
 /// Scans the path recursively. Returns Ok(()) if safe to delete (all empty).
 /// Returns Err if any non-empty item found.
-fn scan_for_non_empty(path: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).context(format!("Failed to get metadata for {:?}", path))?;
+fn scan_for_non_empty(path: &Path) -> std::io::Result<()> {
+    let metadata = fs::symlink_metadata(path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get metadata for {:?}: {}", path, e)))?;
 
     if metadata.is_file() {
         if metadata.len() > 0 {
-             bail!("Found non-empty file: {:?} (size: {})", path, metadata.len());
+             return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Found non-empty file: {:?} (size: {})", path, metadata.len())));
         }
         return Ok(());
     } else if metadata.is_dir() {
-        let entries = fs::read_dir(path).context(format!("Failed to read dir {:?}", path))?;
+        let entries = fs::read_dir(path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to read dir {:?}: {}", path, e)))?;
         for entry in entries {
             let entry = entry?;
             scan_for_non_empty(&entry.path())?;
@@ -68,7 +67,7 @@ fn scan_for_non_empty(path: &Path) -> Result<()> {
         // Actually, user said: "if directory contains ... only 0-byte files".
         // It implies we delete structure.
         // Let's count symlink as non-empty to be safe (it's not a 0-byte file).
-        bail!("Found special file/symlink: {:?}", path);
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Found special file/symlink: {:?}", path)));
     }
 }
 

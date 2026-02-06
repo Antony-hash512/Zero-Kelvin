@@ -135,7 +135,7 @@ teardown() {
 @test "Negative: Input path does not exist" {
     run $ZKS_SQM_BIN create "$TEST_DIR/non_existent.tar" "$OUTPUT_SQFS"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Input path does not exist"* ]]
+    [[ "$output" == *"Invalid path"* ]]
 }
 
 @test "Negative: Unsupported archive format" {

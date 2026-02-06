@@ -105,7 +105,7 @@ teardown() {
     # Check for specific error message
     # "No such file or directory" or "does not exist"
     # Case insensitive grep
-    echo "$output" | grep -i -E "no such file|does not exist"
+    echo "$output" | grep -i -E "invalid path|no such file|does not exist"
 }
 
 @test "Logic: Collision handling (Коллизия имен)" {

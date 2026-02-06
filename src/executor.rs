@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use indicatif::ProgressBar;
 use regex::Regex;
 use std::io::{BufRead, BufReader};
@@ -12,10 +11,10 @@ use std::fs;
 #[cfg_attr(test, mockall::automock)]
 pub trait CommandExecutor {
     /// Runs a command synchronously and captures output.
-    fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
+    fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;
 
     /// Runs a command interactively (inherits stdio).
-    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus>;
+    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<std::process::ExitStatus>;
 
     /// Runs a command while monitoring output file size for progress.
     /// Updates the progress bar with the current size of the output file.
@@ -26,7 +25,7 @@ pub trait CommandExecutor {
         output_file: &Path,
         progress_bar: &ProgressBar,
         poll_interval: Duration,
-    ) -> Result<Output>;
+    ) -> std::io::Result<Output>;
 
     /// Runs a command while parsing stdout for progress percentage.
     /// Looks for patterns like "45%" in stdout and updates the progress bar (0-100 scale).
@@ -35,26 +34,26 @@ pub trait CommandExecutor {
         program: &str,
         args: &[&'a str],
         progress_bar: &ProgressBar,
-    ) -> Result<Output>;
+    ) -> std::io::Result<Output>;
 }
 
 /// Real system executor using std::process::Command.
 pub struct RealSystem;
 
 impl CommandExecutor for RealSystem {
-    fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output> {
+    fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output> {
         Command::new(program)
             .args(args)
             .stdin(Stdio::null())
             .output()
-            .with_context(|| format!("Failed to execute command: {} {:?}", program, args))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute command: {} {:?}: {}", program, args, e)))
     }
 
-    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus> {
+    fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<std::process::ExitStatus> {
         Command::new(program)
             .args(args)
             .status()
-            .with_context(|| format!("Failed to execute interactive command: {} {:?}", program, args))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to execute interactive command: {} {:?}: {}", program, args, e)))
     }
 
     fn run_with_file_progress<'a>(
@@ -64,7 +63,7 @@ impl CommandExecutor for RealSystem {
         output_file: &Path,
         progress_bar: &ProgressBar,
         poll_interval: Duration,
-    ) -> Result<Output> {
+    ) -> std::io::Result<Output> {
         // Spawn the command asynchronously
         let mut child = Command::new(program)
             .args(args)
@@ -72,7 +71,7 @@ impl CommandExecutor for RealSystem {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .with_context(|| format!("Failed to spawn command: {} {:?}", program, args))?;
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to spawn command: {} {:?}: {}", program, args, e)))?;
 
         // Monitor file size in a loop until process exits
         loop {
@@ -90,7 +89,7 @@ impl CommandExecutor for RealSystem {
                     thread::sleep(poll_interval);
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!("Error waiting for process: {}", e));
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Error waiting for process: {}", e)));
                 }
             }
         }
@@ -102,7 +101,7 @@ impl CommandExecutor for RealSystem {
 
         // Get the output
         let output = child.wait_with_output()
-            .with_context(|| format!("Failed to get output from command: {} {:?}", program, args))?;
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get output from command: {} {:?}: {}", program, args, e)))?;
         
         Ok(output)
     }
@@ -112,7 +111,7 @@ impl CommandExecutor for RealSystem {
         program: &str,
         args: &[&'a str],
         progress_bar: &ProgressBar,
-    ) -> Result<Output> {
+    ) -> std::io::Result<Output> {
         // Regex to find percentage like "45%" or "100%"
         let percent_re = Regex::new(r"(\d+)%").expect("Invalid regex");
         
@@ -123,11 +122,11 @@ impl CommandExecutor for RealSystem {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .with_context(|| format!("Failed to spawn command: {} {:?}", program, args))?;
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to spawn command: {} {:?}: {}", program, args, e)))?;
 
         // Take stdout handle for reading
         let stdout = child.stdout.take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to capture stdout"))?;
         
         let reader = BufReader::new(stdout);
         
@@ -147,7 +146,7 @@ impl CommandExecutor for RealSystem {
 
         // Wait for process to finish and collect stderr
         let output = child.wait_with_output()
-            .with_context(|| format!("Failed to get output from command: {} {:?}", program, args))?;
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to get output from command: {} {:?}: {}", program, args, e)))?;
         
         // Final update to 100% if successful
         if output.status.success() {

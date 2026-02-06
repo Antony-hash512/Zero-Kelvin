@@ -1,4 +1,6 @@
-use anyhow::{Result, anyhow, Context};
+// use anyhow::Context; // For legacy contexts if any remain, though mostly removed
+use zero_kelvin_stazis::error::ZksError;
+
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
@@ -39,7 +41,7 @@ fn get_effective_root_cmd() -> Vec<String> {
     let candidates = ["doas", "run0", "sudo"];
     for candidate in &candidates {
          // check if exists in path
-         if let Ok(path) = which::which(candidate) {
+         if let Ok(_path) = which::which(candidate) {
              return vec![candidate.to_string()];
          }
     }
@@ -222,9 +224,9 @@ impl CompressionMode {
         }
     }
 
-    fn get_tar2sqfs_compressor_flag(&self) -> Result<String> {
+    fn get_tar2sqfs_compressor_flag(&self) -> Result<String, ZksError> {
         match self {
-            Self::None => Err(anyhow!("Archive repacking does not support uncompressed mode (tar2sqfs limitation)")),
+            Self::None => Err(ZksError::CompressionError("Archive repacking does not support uncompressed mode (tar2sqfs limitation)".to_string())),
             Self::Zstd(_) => Ok("-c zstd".to_string()),
         }
     }
@@ -445,12 +447,19 @@ fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -
         }
     }
     
-    // Default fallback
+        // Default fallback
     10
 }
 
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(e) = run_app() {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run_app() -> Result<(), ZksError> {
     if std::env::var("RUST_LOG").is_err() {
         // Safe way to set default log level if not present
     }
@@ -556,7 +565,7 @@ fn generate_mapper_name(image_path: &PathBuf) -> String {
 
 
 /// Main logic entry point with dependency injection
-pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<()> {
+pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(), ZksError> {
     match args.command {
         Commands::Create {
             input_path,
@@ -603,25 +612,25 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         p.to_path_buf()
                     }
                 },
-                None => return Err(anyhow!("Output path required")),
+                None => return Err(ZksError::MissingTarget("Output path required".to_string())),
             };
             
             // 0.1 Check for Existing Output
             if final_output.exists() {
                 let is_luks = is_luks_image(&final_output, executor);
                 // Check valid SquashFS signature (magic number)
-                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().ok_or(anyhow!("Invalid path"))?]) {
+                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().ok_or(ZksError::InvalidPath(final_output.clone()))?]) {
                      String::from_utf8_lossy(&output.stdout).contains("Squashfs")
                 } else { false };
 
                 if !overwrite_files && !overwrite_luks_content {
-                     return Err(anyhow!("Output file exists.\nUse --overwrite-files to update content (append).\nUse --overwrite-luks-content to replace LUKS container payload."));
+                     return Err(ZksError::OperationFailed("Output file exists.\nUse --overwrite-files to update content (append).\nUse --overwrite-luks-content to replace LUKS container payload.".to_string()));
                 }
                 
                 if overwrite_files {
                     // Supported for Plain SQFS and LUKS
                     if !is_luks && !is_sqfs {
-                         return Err(anyhow!("Target exists but is not a valid SquashFS or LUKS container. Cannot update."));
+                         return Err(ZksError::OperationFailed("Target exists but is not a valid SquashFS or LUKS container. Cannot update.".to_string()));
                     }
                     // Logic continues below...
                     // For LUKS: we open it and then append.
@@ -630,7 +639,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 
                 if overwrite_luks_content {
                     if !is_luks {
-                         return Err(anyhow!("--overwrite-luks-content requires a valid LUKS container target."));
+                         return Err(ZksError::LuksError("--overwrite-luks-content requires a valid LUKS container target.".to_string()));
                     }
                     // Logic continues below...
                     // We open LUKS, then run mksquashfs with -noappend.
@@ -642,12 +651,12 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // ...
                 // CRITICAL CHANGE: Disable archive support for LUKS due to persistent I/O errors
                 if !input_path.is_dir() {
-                    return Err(anyhow!("Encrypted mode (-e) currently supports only DIRECTORIES.\nPlease extract the archive first and point to the directory."));
+                    return Err(ZksError::OperationFailed("Encrypted mode (-e) currently supports only DIRECTORIES.\nPlease extract the archive first and point to the directory.".to_string()));
                 }
 
                 // Determine raw size (now strictly for directories)
                 // du -sb
-                let raw_size_bytes = if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().ok_or(anyhow!("Invalid input path"))?]) {
+                let raw_size_bytes = if let Ok(output) = executor.run("du", &["-sb", input_path.to_str().ok_or(ZksError::InvalidPath(input_path.clone()))?]) {
                     if output.status.success() {
                         let out_str = String::from_utf8_lossy(&output.stdout);
                         out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
@@ -657,7 +666,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 } else { 0 };
 
                 if raw_size_bytes == 0 {
-                    return Err(anyhow!("Could not determine input directory size or empty input"));
+                    return Err(ZksError::OperationFailed("Could not determine input directory size or empty input".to_string()));
                 }
 
                 let output_buf = &final_output; // Use resolved path
@@ -697,7 +706,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     // - Some filesystems don't support sparse writes through loop
                     // fallocate -l <size> <file>
                     let size_str = container_size.to_string();
-                    let output_str_create = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                    let output_str_create = output_buf.to_str().ok_or(ZksError::InvalidPath(output_buf.clone()))?;
                     
                     let fallocate_output = executor.run("fallocate", &["-l", &size_str, output_str_create]);
                     if let Ok(output) = fallocate_output {
@@ -712,11 +721,11 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                                 "status=none"
                             ])?;
                             if !dd_output.status.success() {
-                                return Err(anyhow!("Failed to create container file"));
+                                return Err(ZksError::OperationFailed("Failed to create container file".to_string()));
                             }
                         }
                     } else {
-                        return Err(anyhow!("Failed to run fallocate"));
+                        return Err(ZksError::OperationFailed("Failed to run fallocate".to_string()));
                     }
                 
                 } // End if !exists
@@ -724,7 +733,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Start Transaction for cleanup
                 let mut transaction = LuksTransaction::new(executor, output_buf);
 
-                let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                let output_str = output_buf.to_str().ok_or(ZksError::InvalidPath(output_buf.clone()))?;
                 
                 // 2. Format LUKS (Only if new)
                 let root_cmd = get_effective_root_cmd();
@@ -740,10 +749,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let args_refs: Vec<&str> = luks_args.iter().map(|s| s.as_str()).collect();
 
                     let status = executor.run_interactive(&prog, &args_refs)
-                        .context("Failed to execute cryptsetup luksFormat")?;
+                        .map_err(|e| ZksError::IoError(e))?;
 
                     if !status.success() {
-                        return Err(anyhow!("luksFormat failed"));
+                        return Err(ZksError::LuksError("luksFormat failed".to_string()));
                     }
                 } else {
                      println!("Opening existing LUKS container for update...");
@@ -763,10 +772,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let args_open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
 
                 let status_open = executor.run_interactive(&prog_open, &args_open_refs)
-                    .context("Failed to execute cryptsetup open")?;
+                    .map_err(|e| ZksError::IoError(e))?;
                 
                 if !status_open.success() {
-                    return Err(anyhow!("cryptsetup open failed"));
+                    return Err(ZksError::LuksError("cryptsetup open failed".to_string()));
                 }
                 
                 transaction.set_mapper(mapper_name.clone());
@@ -776,7 +785,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Execute mksquashfs to mapper_path
                 let pack_result = {
                     let mut cmd_args = vec![
-                         input_path.to_str().ok_or(anyhow!("Invalid input path"))?.to_string(),
+                         input_path.to_str().ok_or(ZksError::InvalidPath(input_path.clone()))?.to_string(),
                          mapper_path.clone(),
                          "-no-recovery".to_string(),
                     ];
@@ -833,7 +842,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     } else if alfa_progress {
                         // EXPERIMENTAL: Custom progress bar - parse stdout for percentages (currently broken)
                         // Get directory size for display
-                        let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().ok_or(anyhow!("Invalid input path"))?]) {
+                        let dir_size = if let Ok(du_output) = executor.run("du", &["-sb", input_path.to_str().ok_or(ZksError::InvalidPath(input_path.clone()))?]) {
                             if du_output.status.success() {
                                 let out_str = String::from_utf8_lossy(&du_output.stdout);
                                 out_str.split_whitespace().next().unwrap_or("0").parse::<u64>().unwrap_or(0)
@@ -871,7 +880,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     };
 
                     if !output.status.success() {
-                         Err(anyhow!("mksquashfs failed: {}", String::from_utf8_lossy(&output.stderr)))
+                         Err(ZksError::OperationFailed(format!("mksquashfs failed: {}", String::from_utf8_lossy(&output.stderr))))
                     } else { Ok(()) }
                 };
 
@@ -958,7 +967,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 
                 // 7. Truncate (Safe now that mapper is closed)
                 if let Some(size) = trim_size {
-                    let container_file = fs::File::options().write(true).open(output_buf).context("Failed to open file for trimming")?;
+                    let container_file = fs::File::options().write(true).open(output_buf).map_err(|e| ZksError::IoError(e))?;
                     let current_len = container_file.metadata()?.len();
                     if size < current_len {
                         println!(" Optimizing container size: {:.1}MB -> {:.1}MB", 
@@ -974,15 +983,15 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
 
             // 1. Check if input exists
             if !input_path.exists() {
-                return Err(anyhow!("Input path does not exist: {:?}", input_path));
+                return Err(ZksError::InvalidPath(input_path.clone()));
             }
 
             // 2. Archive Repacking (File -> SquashFS)
             if input_path.is_file() {
-                let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
+                let input_str = input_path.to_str().ok_or(ZksError::InvalidPath(input_path.clone()))?;
                 // Use final_output resolved earlier
                 let output_buf = &final_output;
-                let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
+                let output_str = output_buf.to_str().ok_or(ZksError::InvalidPath(final_output.clone()))?;
 
                 // Determine decompressor
                 let file_name = input_path.file_name()
@@ -1007,7 +1016,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 } else if file_name.ends_with(".tar.rar") {
                     "unrar p -inul"
                 } else {
-                    return Err(anyhow!("Unsupported archive format: {}", file_name));
+                    return Err(ZksError::CompressionError(format!("Unsupported archive format: {}", file_name)));
                 };
 
                 // Determine compressor flag for tar2sqfs
@@ -1046,7 +1055,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let output = executor.run("sh", &["-c", &full_cmd])?;
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(anyhow!("Archive repack failed: {}", stderr));
+                        return Err(ZksError::OperationFailed(format!("Archive repack failed: {}", stderr)));
                     }
                 } else {
                     // Progress mode: show filling progress bar
@@ -1077,7 +1086,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     } else {
                         pb.finish_with_message("✗ Failed");
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(anyhow!("Archive repack failed: {}", stderr));
+                        return Err(ZksError::OperationFailed(format!("Archive repack failed: {}", stderr)));
                     }
                 }
                 
@@ -1088,8 +1097,8 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             // 3. Standard Directory Packing (Directory -> SquashFS)
             {
                 let output_buf = &final_output; // Use resolved path
-                let output_str = output_buf.to_str().ok_or(anyhow!("Invalid output path"))?;
-                let input_str = input_path.to_str().ok_or(anyhow!("Invalid input path"))?;
+                let output_str = output_buf.to_str().ok_or(ZksError::InvalidPath(output_buf.clone()))?;
+                let input_str = input_path.to_str().ok_or(ZksError::InvalidPath(input_path.clone()))?;
                 
                 // Transaction for cleanup
                 let mut transaction = CreateTransaction::new(output_buf.clone());
@@ -1122,22 +1131,22 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let mk_prog = "mksquashfs";
                     
                     // Helper to run with progress
-                    let run_with_progress = |args: &[String]| -> Result<()> {
+                    let run_with_progress = |args: &[String]| -> Result<(), ZksError> {
                          let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
                          
                         if no_progress {
                              let output = executor.run(mk_prog, &refs)?;
                              if !output.status.success() { 
                                  let stderr = String::from_utf8_lossy(&output.stderr);
-                                 return Err(anyhow!("mksquashfs failed: {}", stderr)); 
+                                 return Err(ZksError::OperationFailed(format!("mksquashfs failed: {}", stderr))); 
                              }
                         } else if vanilla_progress {
                              let status = executor.run_interactive(mk_prog, &refs)?;
-                             if !status.success() { return Err(anyhow!("mksquashfs failed")); }
+                             if !status.success() { return Err(ZksError::OperationFailed("mksquashfs failed".to_string())); }
                         } else if alfa_progress {
                              // Fallback
                              let output = executor.run_interactive(mk_prog, &refs)?;
-                             if !output.success() { return Err(anyhow!("mksquashfs failed")); }
+                             if !output.success() { return Err(ZksError::OperationFailed("mksquashfs failed".to_string())); }
                         } else {
                              // Default Custom Progress
                              // Get directory size
@@ -1176,7 +1185,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                             } else {
                                 pb.finish_with_message("✗ Failed");
                                 let stderr = String::from_utf8_lossy(&output.stderr);
-                                return Err(anyhow!("mksquashfs failed: {}", stderr));
+                                return Err(ZksError::OperationFailed(format!("mksquashfs failed: {}", stderr)));
                             }
                         }
                         Ok(())
@@ -1195,10 +1204,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
         } // End Create
         Commands::Mount { image, mount_point } => {
             if !image.exists() {
-                return Err(anyhow!("Image file does not exist: {:?}", image));
+                return Err(ZksError::InvalidPath(image));
             }
             // Always use absolute path to ensure losetup/detection works reliably
-            let image = fs::canonicalize(image).context("Failed to canonicalize image path")?;
+            let image = fs::canonicalize(image).map_err(|e| ZksError::IoError(e))?;
 
             let target_mount_point = match mount_point {
                 Some(path) => path,
@@ -1227,7 +1236,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 }
             };
             
-            fs::create_dir_all(&target_mount_point).context("Failed to create mount point")?;
+            fs::create_dir_all(&target_mount_point).map_err(|e| ZksError::IoError(e))?;
             
             // Check if this is a LUKS container
             if is_luks_image(&image, executor) {
@@ -1248,7 +1257,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         "-t".to_string(),
                         "squashfs".to_string(),
                         mapper_path.clone(),
-                        target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?.to_string(),
+                        target_mount_point.to_str().ok_or(ZksError::InvalidPath(target_mount_point.clone()))?.to_string(),
                     ]);
                     
                     let prog = mount_args.remove(0);
@@ -1277,7 +1286,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 open_args.extend(vec![
                     "cryptsetup".to_string(),
                     "open".to_string(),
-                    image.to_str().ok_or(anyhow!("Invalid image path"))?.to_string(),
+                    image.to_str().ok_or(ZksError::InvalidPath(image.clone()))?.to_string(),
                     mapper_name.clone(),
                 ]);
                 
@@ -1285,10 +1294,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
                 
                 let status = executor.run_interactive(&open_prog, &open_refs)
-                    .context("Failed to execute cryptsetup open")?;
+                    .map_err(|e| ZksError::IoError(e))?;
                 
                 if !status.success() {
-                    return Err(anyhow!("Failed to open encrypted container"));
+                    return Err(ZksError::LuksError("Failed to open encrypted container".to_string()));
                 }
                 
                 // Mount the mapper device
@@ -1298,7 +1307,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     "-t".to_string(),
                     "squashfs".to_string(),
                     mapper_path.clone(),
-                    target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?.to_string(),
+                    target_mount_point.to_str().ok_or(ZksError::InvalidPath(target_mount_point.clone()))?.to_string(),
                 ]);
                 
                 let mount_prog = mount_args.remove(0);
@@ -1315,7 +1324,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let close_refs: Vec<&str> = close_args.iter().map(|s| s.as_str()).collect();
                     let _ = executor.run(&close_prog, &close_refs);
                     
-                    return Err(anyhow!("Mount failed: {}", stderr));
+                    return Err(ZksError::OperationFailed(format!("Mount failed: {}", stderr)));
                 }
                 
                 println!("Mounted at {}", target_mount_point.display());
@@ -1323,15 +1332,15 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             }
             
             // Plain SquashFS - use squashfuse (no root required)
-            let mp_str = target_mount_point.to_str().ok_or(anyhow!("Invalid mount point path"))?;
-            let img_str = image.to_str().ok_or(anyhow!("Invalid image path"))?;
+            let mp_str = target_mount_point.to_str().ok_or(ZksError::InvalidPath(target_mount_point.clone()))?;
+            let img_str = image.to_str().ok_or(ZksError::InvalidPath(image.clone()))?;
             
             // Added -o nonempty to allow mounting over non-empty directories
             let output = executor.run("squashfuse", &["-o", "nonempty", img_str, mp_str])?;
             
              if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow!("squashfuse failed: {}", stderr));
+                return Err(ZksError::OperationFailed(format!("squashfuse failed: {}", stderr)));
             }
             
             Ok(())
@@ -1343,7 +1352,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             let root_cmd = get_effective_root_cmd();
             
             if !path.exists() {
-                return Err(anyhow!("Path does not exist: {:?}", path));
+                return Err(ZksError::InvalidPath(path.clone()));
             }
 
             let mut targets = Vec::new();
@@ -1353,7 +1362,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             } else if path.is_file() {
                 // It's an image file. Find matching squashfuse processes.
                 let abs_path = fs::canonicalize(path)
-                    .context("Failed to canonicalize image path")?;
+                    .map_err(|e| ZksError::IoError(e))?;
                 let abs_path_str = abs_path.to_str().unwrap_or("");
                 
                 if std::env::var("RUST_LOG").is_ok() {
@@ -1361,7 +1370,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 }
 
                 // Iterate over /proc
-                let proc_dir = fs::read_dir("/proc").context("Failed to read /proc")?;
+                let proc_dir = fs::read_dir("/proc").map_err(|e| ZksError::IoError(e))?;
                 
                 for entry in proc_dir {
                     if let Ok(entry) = entry {
@@ -1504,14 +1513,14 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 }
                 
                 if targets.is_empty() {
-                    return Err(anyhow!("Image is not mounted (no squashfuse or LUKS mount found): {:?}", path));
+                    return Err(ZksError::OperationFailed(format!("Image is not mounted (no squashfuse or LUKS mount found): {:?}", path)));
                 }
             } else {
-                 return Err(anyhow!("Path is neither file nor directory: {:?}", path));
+                 return Err(ZksError::InvalidPath(path.clone()));
             }
             
             for target in targets {
-                let target_str = target.to_str().ok_or(anyhow!("Invalid target path"))?;
+                let target_str = target.to_str().ok_or(ZksError::InvalidPath(target.clone()))?;
                 
                 // Detect source device using findmnt (doesn't need root - just reads /proc/mounts)
                 let mut source_device: Option<String> = None;
@@ -1545,7 +1554,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(anyhow!("umount failed for {:?}: {}", target, stderr));
+                        return Err(ZksError::OperationFailed(format!("umount failed for {:?}: {}", target, stderr)));
                     }
                     
                     // Close LUKS mapper
@@ -1569,11 +1578,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 } else {
                     // Plain squashfuse mount - use fusermount -u
                     let output = executor.run("fusermount", &["-u", target_str])?;
-                    
-                    if !output.status.success() {
-                         let stderr = String::from_utf8_lossy(&output.stderr);
-                         return Err(anyhow!("fusermount failed for {:?}: {}", target, stderr));
-                    }
+                                        if !output.status.success() {
+                          let stderr = String::from_utf8_lossy(&output.stderr);
+                          return Err(ZksError::OperationFailed(format!("fusermount failed for {:?}: {}", target, stderr)));
+                     }
                 }
                 
                 // Post-unmount cleanup: remove directory if empty
@@ -1599,8 +1607,8 @@ mod tests {
     mock! {
         pub CommandExecutor {}
         impl CommandExecutor for CommandExecutor {
-            fn run<'a>(&self, program: &str, args: &[&'a str]) -> Result<Output>;
-            fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> Result<std::process::ExitStatus>;
+            fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;
+            fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<std::process::ExitStatus>;
             fn run_with_file_progress<'a>(
                 &self,
                 program: &str,
@@ -1608,13 +1616,13 @@ mod tests {
                 output_file: &std::path::Path,
                 progress_bar: &indicatif::ProgressBar,
                 poll_interval: std::time::Duration,
-            ) -> Result<Output>;
+            ) -> std::io::Result<Output>;
             fn run_with_stdout_progress<'a>(
                 &self,
                 program: &str,
                 args: &[&'a str],
                 progress_bar: &indicatif::ProgressBar,
-            ) -> Result<Output>;
+            ) -> std::io::Result<Output>;
         }
     }
 
