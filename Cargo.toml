@@ -1,6 +1,6 @@
 [package]
 name = "zero-kelvin-stazis"
-version = "0.1.55"
+version = "0.1.56"
 edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
