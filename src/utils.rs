@@ -40,6 +40,35 @@ pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError
     Err(ZksError::OperationFailed("Root privileges required but no elevation tool (sudo, doas, etc.) found.".to_string()))
 }
 
+pub fn is_permission_denied(err: &ZksError) -> bool {
+    match err {
+        ZksError::IoError(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+        // Also handle when OperationFailed might perform checks, but usually it's IO
+        _ => false,
+    }
+}
+
+pub fn re_exec_with_runner(runner: &str) -> Result<(), ZksError> {
+    use std::os::unix::process::CommandExt;
+    
+    let args: Vec<String> = std::env::args().collect();
+    // args[0] is the current binary path
+    let program = &args[0];
+    let cmd_args = &args[1..];
+    
+    // Construct command: runner program args...
+    // But Runner might be "sudo".
+    // We want: sudo /path/to/zks freeze ...
+    
+    let err = std::process::Command::new(runner)
+        .arg(program)
+        .args(cmd_args)
+        .exec();
+        
+    // exec replaces the process, so we only return if it fails
+    Err(ZksError::OperationFailed(format!("Failed to re-execute with {}: {}", runner, err)))
+}
+
 // Helpers for testing (not exposed)
 fn parse_uid_from_status(content: &str) -> Result<u32, ZksError> {
     for line in content.lines() {
@@ -158,6 +187,29 @@ pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool, ZksError> {
         }
     }
     Ok(true)
+}
+
+pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
+    for path in paths {
+        let metadata = fs::metadata(path).map_err(|_| ZksError::InvalidPath(path.clone()))?;
+
+        if metadata.is_dir() {
+            if let Err(e) = fs::read_dir(path) {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Err(ZksError::IoError(e));
+                }
+                return Err(ZksError::IoError(e));
+            }
+        } else {
+            if let Err(e) = fs::File::open(path) {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Err(ZksError::IoError(e));
+                }
+                return Err(ZksError::IoError(e));
+            }
+        }
+    }
+    Ok(())
 }
 
 

@@ -144,6 +144,7 @@ use zero_kelvin_stazis::error::ZksError;
 use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin_stazis::executor::RealSystem;
+use zero_kelvin_stazis::utils;
 use std::fs;
 
 fn main() {
@@ -244,7 +245,15 @@ fn run_app() -> Result<(), ZksError> {
             // Log info
             // println!("Freezing {:?} to {:?}", targets, options.output);
             
-            engine::freeze(&targets, &options, &executor)?;
+            // engine::freeze(&targets, &options, &executor)?;
+            if let Err(e) = engine::freeze(&targets, &options, &executor) {
+                 if utils::is_permission_denied(&e) {
+                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during freeze. Retrying with elevation...")? {
+                           return utils::re_exec_with_runner(&runner);
+                      }
+                 }
+                 return Err(e);
+            }
             println!("Successfully created archive: {:?}", options.output);
         }
         Commands::Unfreeze { archive_path, overwrite, skip_existing } => {
@@ -253,7 +262,15 @@ fn run_app() -> Result<(), ZksError> {
                 skip_existing,
             };
             let executor = RealSystem;
-            engine::unfreeze(&archive_path, &options, &executor)?;
+            // engine::unfreeze(&archive_path, &options, &executor)?;
+            if let Err(e) = engine::unfreeze(&archive_path, &options, &executor) {
+                 if utils::is_permission_denied(&e) {
+                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during unfreeze. Retrying with elevation...")? {
+                           return utils::re_exec_with_runner(&runner);
+                      }
+                 }
+                 return Err(e);
+            }
             println!("Unfreeze completed successfully.");
         }
         Commands::Check { archive_path, use_cmp, force_delete } => {
@@ -262,7 +279,15 @@ fn run_app() -> Result<(), ZksError> {
                 use_cmp,
                 force_delete,
             };
-            engine::check(&archive_path, &options, &executor)?;
+            // engine::check(&archive_path, &options, &executor)?;
+            if let Err(e) = engine::check(&archive_path, &options, &executor) {
+                 if utils::is_permission_denied(&e) {
+                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during check. Retrying with elevation...")? {
+                           return utils::re_exec_with_runner(&runner);
+                      }
+                 }
+                 return Err(e);
+            }
             println!("Check completed successfully.");
         }
     }

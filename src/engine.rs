@@ -618,6 +618,9 @@ pub fn freeze<E: CommandExecutor>(
     options: &FreezeOptions,
     executor: &E,
 ) -> Result<(), ZksError> {
+    // 0. Ensure we can read targets (triggers escalation if needed)
+    utils::ensure_read_permissions(targets)?;
+
     // 0. Auto-GC: Cleanup stale build directories (protected by flock)
     if let Err(e) = try_gc_staging() {
         warn!("GC Error: {}", e); 
