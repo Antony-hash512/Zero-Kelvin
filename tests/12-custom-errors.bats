@@ -49,6 +49,12 @@ teardown() {
 }
 
 @test "Friendly Error: Incorrect passphrase" {
+    # This test uses -e, which requires ROOT. 
+    # If not root, skip to avoid password prompt.
+    if [ "$(id -u)" -ne 0 ]; then
+        skip "Test requires root (for -e) to simulate passphrase failure without prompt"
+    fi
+
     # Mock squash_manager-rs.
     # Since zks calls squash_manager-rs for the heavy lifting.
     

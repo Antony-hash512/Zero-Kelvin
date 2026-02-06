@@ -24,6 +24,10 @@ teardown() {
 }
 
 @test "Privilege: Auto-escalate on LUKS device-mapper error" {
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "Cannot test privilege escalation when already root"
+    fi
+
     # 1. Mock sudo
     cat <<EOF > "$MOCK_BIN/sudo"
 #!/bin/sh
@@ -57,6 +61,10 @@ EOF
 }
 
 @test "Privilege: Auto-escalate on explicit 'must be run as root' error" {
+    if [ "$(id -u)" -eq 0 ]; then
+        skip "Cannot test privilege escalation when already root"
+    fi
+
     # 1. Mock sudo
     cat <<EOF > "$MOCK_BIN/sudo"
 #!/bin/sh
