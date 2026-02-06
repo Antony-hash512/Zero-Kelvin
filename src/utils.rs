@@ -159,3 +159,51 @@ pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool> {
     }
     Ok(true)
 }
+
+
+/// Expands a tilde (~) at the start of a path to the user's HOME directory.
+/// Supports "~/" and "~" (exact). Does NOT support "~user".
+/// Returns the original path if HOME is not set or tilde is not present.
+pub fn expand_tilde(path_str: &str) -> PathBuf {
+    if let Some(stripped) = path_str.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    } else if path_str == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    PathBuf::from(path_str)
+}
+
+#[cfg(test)]
+mod tests_expand {
+    use super::*;
+
+    #[test]
+    fn test_expand_tilde_home() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let expanded = expand_tilde("~");
+        assert_eq!(expanded, PathBuf::from(&home));
+    }
+
+    #[test]
+    fn test_expand_tilde_path() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let expanded = expand_tilde("~/Documents/file.txt");
+        assert_eq!(expanded, PathBuf::from(format!("{}/Documents/file.txt", home)));
+    }
+
+    #[test]
+    fn test_no_expand_absolute() {
+        let path = "/tmp/file";
+        assert_eq!(expand_tilde(path), PathBuf::from(path));
+    }
+
+    #[test]
+    fn test_no_expand_relative() {
+        let path = "Documents/file.txt";
+        assert_eq!(expand_tilde(path), PathBuf::from(path));
+    }
+}

@@ -286,7 +286,9 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
         for line in content.lines() {
             let trimmed = line.trim();
             if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                targets.push(PathBuf::from(trimmed));
+                // Fix: Expand tilde manually
+                let expanded = zero_kelvin_stazis::utils::expand_tilde(trimmed);
+                targets.push(expanded);
             }
         }
     }
