@@ -547,20 +547,38 @@ fn is_luks_image(image_path: &PathBuf, executor: &impl CommandExecutor) -> bool 
 }
 
 
-/// Generate mapper name from image basename (sanitized)
+/// Generate mapper name from image basename (sanitized).
+/// Checks /dev/mapper for collisions and appends a numeric suffix if needed.
 fn generate_mapper_name(image_path: &PathBuf) -> String {
     let basename = image_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
-    
+
     // Sanitize: replace dots with underscores, keep alphanumeric and underscore
-    let sanitized = basename
+    let sanitized: String = basename
         .chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
-        .collect::<String>();
-    
-    format!("sq_{}", sanitized)
+        .collect();
+
+    let base = format!("sq_{}", sanitized);
+
+    // Check for collision: if /dev/mapper/<base> already exists, append suffix
+    if !PathBuf::from(format!("/dev/mapper/{}", base)).exists() {
+        return base;
+    }
+
+    for i in 2..=99 {
+        let candidate = format!("{}_{}", base, i);
+        if !PathBuf::from(format!("/dev/mapper/{}", candidate)).exists() {
+            return candidate;
+        }
+    }
+
+    // Fallback: use timestamp + random to guarantee uniqueness
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let rnd: u32 = rand::rng().random_range(1000..9999);
+    format!("{}_{}_{}", base, ts, rnd)
 }
 
 

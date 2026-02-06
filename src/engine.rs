@@ -693,6 +693,13 @@ pub fn freeze<E: CommandExecutor>(
     Ok(())
 }
 
+/// Escape a string for safe use inside single quotes in POSIX shell.
+/// Single quotes prevent ALL interpretation ($, `, \, etc.).
+/// The only character that needs escaping is `'` itself: `'` -> `'\''`
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 fn generate_freeze_script(
     manifest: &Manifest,
     build_dir: &Path,
@@ -702,34 +709,24 @@ fn generate_freeze_script(
     let mut script = String::new();
     script.push_str("#!/bin/sh\n");
     script.push_str("set -e\n"); // Exit on error
-    
+
     // Bind mounts
     for entry in &manifest.files {
         if entry.entry_type == crate::manifest::EntryType::Symlink {
             continue; // Already staged as symlink, no bind mount needed
         }
-        // Source: restore_path/name
-        // Wait, restore_path is parent dir. So full path is restore_path/name.
         if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
              let src = Path::new(parent).join(name);
              let dest = build_dir.join(payload_name).join("to_restore").join(entry.id.to_string()).join(name);
-             
-             // Escape paths? Ideally use safe quoting. 
-             // Using debug format {:?} adds quotes but might not be sh-safe.
-             // Simple single quoting is safer if no single quotes.
-             // For now assume logic needs simple quoting.
-             script.push_str(&format!("mount --bind \"{}\" \"{}\"\n", src.display(), dest.display()));
+
+             let src_quoted = shell_quote(&src.display().to_string());
+             let dest_quoted = shell_quote(&dest.display().to_string());
+             script.push_str(&format!("mount --bind {} {}\n", src_quoted, dest_quoted));
         }
     }
-    
-    // Call squash_manager-rs
-    // "squash_manager-rs create <options> <input> <output>"
-    // Assuming squash_manager-rs is in PATH.
-    // If it's a sibling binary, we might need to resolve it?
-    // Legacy assumed in PATH or resolved via functions.
-    // We'll assume PATH for now.
+
     let encrypt_flag = if options.encrypt { "--encrypt" } else { "" };
-    
+
     let mut flags = String::new();
     if options.overwrite_files {
         flags.push_str(" --overwrite-files");
@@ -750,13 +747,16 @@ fn generate_freeze_script(
         ProgressMode::Alfa => "--alfa-progress",
     };
 
+    let input_quoted = shell_quote(&input_dir.display().to_string());
+    let output_quoted = shell_quote(&options.output.display().to_string());
+
     script.push_str(&format!(
-        "squash_manager-rs create {} {} {} \"{}\" \"{}\"\n",
+        "squash_manager-rs create {} {} {} {} {}\n",
         encrypt_flag,
         flags,
         progress_flag,
-        input_dir.display(),
-        options.output.display()
+        input_quoted,
+        output_quoted
     ));
 
     Ok(script)
@@ -882,14 +882,64 @@ mod tests {
         let payload_name = "test_payload";
         let script = generate_freeze_script(&manifest, &build_dir, payload_name, &options).unwrap();
         
-        assert!(script.contains("mount --bind \"/src/dir1/file1\""));
-        assert!(script.contains(&format!("build/test_payload/to_restore/1/file1")));
+        assert!(script.contains("mount --bind '/src/dir1/file1'"));
+        assert!(script.contains("to_restore/1/file1'"));
         assert!(script.contains("squash_manager-rs create"));
-        assert!(script.contains("build/test_payload"));
+        assert!(script.contains("build/test_payload'"));
         assert!(script.contains("--no-progress"));
     }
     
     
+    #[test]
+    fn test_shell_quote() {
+        // Normal string
+        assert_eq!(shell_quote("hello"), "'hello'");
+        // String with single quote
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        // Dangerous characters that double-quotes would NOT protect from
+        assert_eq!(shell_quote("$(rm -rf /)"), "'$(rm -rf /)'");
+        assert_eq!(shell_quote("`malicious`"), "'`malicious`'");
+        assert_eq!(shell_quote("path with $VAR"), "'path with $VAR'");
+        assert_eq!(shell_quote("back\\slash"), "'back\\slash'");
+    }
+
+    #[test]
+    fn test_generate_freeze_script_injection_safe() {
+        let temp = tempfile::tempdir().unwrap();
+        let build_dir = temp.path().join("build");
+
+        let manifest = Manifest {
+             metadata: Metadata::new("test-host".into(), PrivilegeMode::User),
+             files: vec![
+                 FileEntry {
+                     id: 1,
+                     entry_type: crate::manifest::EntryType::Directory,
+                     name: Some("$(whoami)".into()),
+                     restore_path: Some("/tmp/`id`".into()),
+                     original_path: None
+                 }
+             ]
+        };
+
+        let options = FreezeOptions {
+            encrypt: false,
+            output: PathBuf::from("/tmp/out $HOME.sqfs"),
+            overwrite_files: false,
+            overwrite_luks_content: false,
+            progress_mode: ProgressMode::None,
+            compression: None,
+            dereference: false,
+        };
+
+        let script = generate_freeze_script(&manifest, &build_dir, "payload", &options).unwrap();
+        // All dangerous chars must be inside single quotes (neutralized)
+        assert!(script.contains("'/tmp/`id`/$(whoami)'"));
+        assert!(script.contains("'/tmp/out $HOME.sqfs'"));
+        // Must NOT contain unquoted dangerous patterns
+        assert!(!script.contains("\"$("));
+        assert!(!script.contains("\"`"));
+    }
+
     #[test]
     fn test_freeze_execution_flow() {
         // Can't run full freeze because prepare_staging needs real paths.

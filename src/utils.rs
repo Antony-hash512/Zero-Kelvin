@@ -226,20 +226,54 @@ pub fn get_stazis_temp_dir_path() -> Result<PathBuf, ZksError> {
 }
 
 /// Returns the path to /tmp/stazis-<uid> and ensures it exists with 0700 permissions.
+/// Uses atomic mkdir + ownership verification to prevent symlink attacks (TOCTOU).
 pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::MetadataExt;
     let path = get_stazis_temp_dir_path()?;
-    
-    if !path.exists() {
-        fs::create_dir_all(&path).map_err(ZksError::IoError)?;
+    let uid = get_current_uid()?;
+
+    // Attempt atomic create (not create_dir_all — that follows symlinks).
+    match fs::create_dir(&path) {
+        Ok(()) => {
+            // We just created it — set permissions.
+            let mut perms = fs::metadata(&path).map_err(ZksError::IoError)?.permissions();
+            perms.set_mode(0o700);
+            fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Directory already exists — verify it's safe to use:
+            // 1. Must be a real directory (not a symlink)
+            // 2. Must be owned by us
+            // 3. Must have 0700 permissions
+            let meta = fs::symlink_metadata(&path).map_err(ZksError::IoError)?;
+
+            if meta.file_type().is_symlink() {
+                return Err(ZksError::StagingError(
+                    format!("Security: {:?} is a symlink (possible attack). Refusing to use.", path)
+                ));
+            }
+            if !meta.is_dir() {
+                return Err(ZksError::StagingError(
+                    format!("Security: {:?} exists but is not a directory.", path)
+                ));
+            }
+            if meta.uid() != uid {
+                return Err(ZksError::StagingError(
+                    format!("Security: {:?} is owned by uid {} but we are uid {}. Refusing to use.", path, meta.uid(), uid)
+                ));
+            }
+
+            // Fix permissions if needed
+            let mut perms = meta.permissions();
+            if perms.mode() & 0o777 != 0o700 {
+                perms.set_mode(0o700);
+                fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
+            }
+        }
+        Err(e) => return Err(ZksError::IoError(e)),
     }
-    
-    let mut perms = fs::metadata(&path).map_err(ZksError::IoError)?.permissions();
-    if perms.mode() & 0o777 != 0o700 {
-        perms.set_mode(0o700);
-        fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
-    }
-    
+
     Ok(path)
 }
 
