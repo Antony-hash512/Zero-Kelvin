@@ -708,24 +708,43 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                     let size_str = container_size.to_string();
                     let output_str_create = output_buf.to_str().ok_or(ZksError::InvalidPath(output_buf.clone()))?;
                     
-                    let fallocate_output = executor.run("fallocate", &["-l", &size_str, output_str_create]);
-                    if let Ok(output) = fallocate_output {
-                        if !output.status.success() {
-                            // Fallback to dd if fallocate fails (e.g., on some filesystems)
-                            let count = (container_size / (1024 * 1024)) + 1; // Convert to MB
-                            let dd_output = executor.run("dd", &[
-                                "if=/dev/zero",
-                                &format!("of={}", output_str_create),
-                                "bs=1M",
-                                &format!("count={}", count),
-                                "status=none"
-                            ])?;
-                            if !dd_output.status.success() {
-                                return Err(ZksError::OperationFailed("Failed to create container file".to_string()));
+                    
+                    // Fallback to dd if fallocate failed (non-success status) OR if we fell through above
+                    // Re-check fallocate success? 
+                    // Refactoring for clarity:
+                    
+                    let mut created = false;
+                    let mut fallocate_stderr = String::new();
+                    
+                    let fallocate_res = executor.run("fallocate", &["-l", &size_str, output_str_create]);
+                    
+                    if let Ok(out) = fallocate_res {
+                        if out.status.success() {
+                            created = true;
+                        } else {
+                            fallocate_stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                            if std::env::var("RUST_LOG").is_ok() {
+                                eprintln!("DEBUG: fallocate failed, try dd. Stderr: {}", fallocate_stderr);
                             }
                         }
-                    } else {
-                        return Err(ZksError::OperationFailed("Failed to run fallocate".to_string()));
+                    } else if let Err(e) = fallocate_res {
+                         fallocate_stderr = e.to_string();
+                    }
+                    
+                    if !created {
+                        let count = (container_size / (1024 * 1024)) + 1;
+                        let dd_output = executor.run("dd", &[
+                            "if=/dev/zero",
+                            &format!("of={}", output_str_create),
+                            "bs=1M",
+                            &format!("count={}", count),
+                            "status=none"
+                        ])?;
+                        
+                        if !dd_output.status.success() {
+                            let dd_err = String::from_utf8_lossy(&dd_output.stderr);
+                            return Err(ZksError::OperationFailed(format!("Failed to create container file. fallocate error: '{}'. dd error: '{}'", fallocate_stderr.trim(), dd_err.trim())));
+                        }
                     }
                 
                 } // End if !exists
