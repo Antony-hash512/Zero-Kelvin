@@ -96,8 +96,14 @@ EOF
          ln -sf "$ZKS_BIN" "$MOCK_BIN/squash_manager-rs"
     fi
 
-    # Run freeze -e
-    run "$ZKS_BIN" freeze "$TEMP_DIR/input" "$TEMP_DIR/out.sqfs" -e --no-progress
+    # Run freeze -e with fakeroot to bypass "must be run as root" check in squash_manager-rs
+    # (Since we are testing error handling of fallocate, not privilege escalation)
+    if command -v fakeroot >/dev/null 2>&1; then
+        run fakeroot "$ZKS_BIN" freeze "$TEMP_DIR/input" "$TEMP_DIR/output.sqfs" -e --no-progress
+    else
+        echo "Skip: fakeroot not found"
+        skip "fakeroot not found"
+    fi
     
     assert_failure
     # Assert we see the detailed error

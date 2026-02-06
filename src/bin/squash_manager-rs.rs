@@ -578,6 +578,17 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             overwrite_files,
             overwrite_luks_content,
         } => {
+            // Check Privilege for LUKS
+            if encrypt {
+                #[cfg(not(test))]
+                {
+                    let euid = unsafe { libc::geteuid() };
+                    if euid != 0 {
+                        return Err(ZksError::OperationFailed("LUKS creation requires root privileges: must be run as root".to_string()));
+                    }
+                }
+            }
+
             // Define compression strategy
             let comp_mode = CompressionMode::from_level(compression);
 

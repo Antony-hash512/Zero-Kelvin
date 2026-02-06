@@ -55,3 +55,28 @@ EOF
     # assert_output --partial "Retrying with elevation" # Check engine message?
     # Actually, zks-rs binary prints "sudo ...".
 }
+
+@test "Privilege: Auto-escalate on explicit 'must be run as root' error" {
+    # 1. Mock sudo
+    cat <<EOF > "$MOCK_BIN/sudo"
+#!/bin/sh
+echo "MOCK_SUDO_DETECTED"
+exit 0
+EOF
+    chmod +x "$MOCK_BIN/sudo"
+
+    # 2. Mock squash_manager-rs to return the specific RootRequired error
+    cat <<EOF > "$MOCK_BIN/squash_manager-rs"
+#!/bin/sh
+echo "Error: Operation failed: LUKS creation requires root privileges: must be run as root" >&2
+exit 1
+EOF
+    chmod +x "$MOCK_BIN/squash_manager-rs"
+
+    # 3. Run freeze with -e
+    run "$ZKS_BIN" freeze "$TEMP_DIR/input" "$TEMP_DIR/out.sqfs" -e --no-progress
+    
+    # 4. Verify
+    assert_success
+    assert_output --partial "MOCK_SUDO_DETECTED"
+}
