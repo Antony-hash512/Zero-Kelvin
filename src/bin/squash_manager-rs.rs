@@ -1213,13 +1213,16 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                         .unwrap_or_default()
                         .as_secs();
                     
-                    // Simple random suffix to avoid collisions
                     let random_suffix: u32 = rand::rng().random_range(100000..999999);
+                    let dir_name = format!("mount_{}_{}_{}", prefix, timestamp, random_suffix);
                     
-                    let dir_name = format!("{}_{}_{}", prefix, timestamp, random_suffix);
-                    let path = env::current_dir()?.join(dir_name);
+                    // Use /tmp/stazis-<uid> for reliability (avoids FUSE-on-FUSE/Network issues)
+                    let stazis_tmp = zero_kelvin_stazis::utils::get_stazis_temp_dir()
+                        .unwrap_or_else(|_| env::temp_dir()); 
                     
-                    println!("No mount point specified. Using auto-generated path: {}", path.display());
+                    let path = stazis_tmp.join(dir_name);
+                    
+                    println!("No mount point specified. Using secure local path for stability: {}", path.display());
                     path
                 }
             };

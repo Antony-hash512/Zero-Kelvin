@@ -5,7 +5,6 @@ use crate::manifest::{Manifest, Metadata, FileEntry, PrivilegeMode};
 use crate::error::ZksError;
 use crate::utils;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use fs2::FileExt; // For flock
 // rand is in Cargo.toml
 use tempfile;
@@ -16,19 +15,8 @@ use log::{warn, info};
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
 pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File), ZksError> {
     // 1. Resolve Staging Root: /tmp/stazis-<uid>
-    let uid = utils::get_current_uid().map_err(ZksError::Unknown)?;
-    let staging_root = std::path::PathBuf::from(format!("/tmp/stazis-{}", uid));
-    
-    // Ensure root exists with 0700 permissions
-    if !staging_root.exists() {
-        fs::create_dir_all(&staging_root).map_err(ZksError::IoError)?;
-    }
-    
-    let mut perms = fs::metadata(&staging_root)?.permissions();
-    if perms.mode() & 0o777 != 0o700 {
-        perms.set_mode(0o700);
-        fs::set_permissions(&staging_root, perms).map_err(ZksError::IoError)?;
-    }
+    let staging_root = utils::get_stazis_temp_dir().map_err(ZksError::Unknown)?;
+
 
     // 2. Create unique build directory: /tmp/stazis-<uid>/build_<timestamp>_<random>
     let timestamp = std::time::SystemTime::now()
@@ -111,8 +99,7 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
 /// Iterates over subdirectories in the cache. Tries to acquire non-blocking exclusive lock on .lock.
 /// If successful, it means the process is dead, so we delete the directory.
 pub fn try_gc_staging() -> Result<(), ZksError> {
-    let uid = utils::get_current_uid().map_err(ZksError::Unknown)?;
-    let staging_root = std::path::PathBuf::from(format!("/tmp/stazis-{}", uid));
+    let staging_root = utils::get_stazis_temp_dir_path().map_err(ZksError::Unknown)?;
     
     if !staging_root.exists() {
         return Ok(());

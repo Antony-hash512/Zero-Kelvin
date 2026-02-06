@@ -161,6 +161,30 @@ pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool> {
 }
 
 
+/// Returns the path to /tmp/stazis-<uid> without ensuring it exists.
+pub fn get_stazis_temp_dir_path() -> Result<PathBuf> {
+    let uid = get_current_uid()?;
+    Ok(PathBuf::from(format!("/tmp/stazis-{}", uid)))
+}
+
+/// Returns the path to /tmp/stazis-<uid> and ensures it exists with 0700 permissions.
+pub fn get_stazis_temp_dir() -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let path = get_stazis_temp_dir_path()?;
+    
+    if !path.exists() {
+        fs::create_dir_all(&path)?;
+    }
+    
+    let mut perms = fs::metadata(&path)?.permissions();
+    if perms.mode() & 0o777 != 0o700 {
+        perms.set_mode(0o700);
+        fs::set_permissions(&path, perms)?;
+    }
+    
+    Ok(path)
+}
+
 /// Expands a tilde (~) at the start of a path to the user's HOME directory.
 /// Supports "~/" and "~" (exact). Does NOT support "~user".
 /// Returns the original path if HOME is not set or tilde is not present.
