@@ -43,7 +43,13 @@ pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError
 pub fn is_permission_denied(err: &ZksError) -> bool {
     match err {
         ZksError::IoError(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
-        // Also handle when OperationFailed might perform checks, but usually it's IO
+        ZksError::OperationFailed(msg) => {
+            let msg_lower = msg.to_lowercase();
+            msg_lower.contains("permission denied") || 
+            msg_lower.contains("operation not permitted") ||
+            msg_lower.contains("cannot initialize device-mapper") ||
+            msg_lower.contains("must be run as root")
+        },
         _ => false,
     }
 }
