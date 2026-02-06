@@ -10,3 +10,7 @@ pub const LUKS_HEADER_SIZE: u64 = 32 * 1024 * 1024; // 32MB for LUKS2 header
 
 /// Safety buffer size in bytes to avoid truncation
 pub const LUKS_SAFETY_BUFFER: u64 = 128 * 1024 * 1024; // 128MB safety buffer to avoid truncation
+
+/// Whitelist of allowed privilege escalation commands.
+/// Only these binaries are accepted via ROOT_CMD env var or config file.
+pub const ALLOWED_ROOT_CMDS: &[&str] = &["sudo", "doas", "sudo-rs", "run0", "pkexec", "please"];

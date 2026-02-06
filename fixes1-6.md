@@ -58,30 +58,23 @@ an attacker-controlled location. `create_dir_all` follows symlinks.
 
 ---
 
-## #3. `ROOT_CMD` from Environment Variable [MEDIUM] -- NOT FIXED (Recommendation)
+## #3. `ROOT_CMD` from Environment Variable [MEDIUM] -- FIXED
 
-**File:** `src/bin/squash_manager-rs.rs` (function `get_effective_root_cmd`)
+**File:** `src/bin/squash_manager-rs.rs` (function `get_effective_root_cmd`), `src/constants.rs`
 
 **Problem:**
-```rust
-if let Ok(cmd) = std::env::var("ROOT_CMD") {
-    return cmd.split_whitespace().map(|s| s.to_string()).collect();
-}
-```
-An attacker controlling the environment could set `ROOT_CMD="malicious_binary"` to
-get arbitrary code execution when `squash_manager-rs` performs privileged operations.
+`ROOT_CMD` env var was accepted without validation, allowing arbitrary binary execution.
 
-**Possible mitigations (not implemented):**
-1. **Whitelist approach:** Only accept known values (`sudo`, `doas`, `run0`, `pkexec`):
-   ```rust
-   let allowed = ["sudo", "doas", "run0", "pkexec"];
-   if allowed.contains(&cmd.trim()) { ... }
-   ```
-2. **Resolve and validate:** Check that the binary resolves to a path in `/usr/bin/` or `/usr/sbin/`.
-3. **Remove env var support entirely:** Rely only on auto-detection (`which`).
-4. **Sanitize:** Reject values containing `/`, spaces, or special characters.
-
-Option 1 (whitelist) is the most pragmatic and minimally invasive approach.
+**Fix:**
+- Added compiled-in whitelist `ALLOWED_ROOT_CMDS` in `src/constants.rs`:
+  `["sudo", "doas", "sudo-rs", "run0", "pkexec", "please"]`
+- `get_effective_root_cmd()` now validates `ROOT_CMD` against the whitelist before accepting.
+  Non-whitelisted values trigger `eprintln` warning and are ignored.
+- Optional user config `~/.config/stazis/allowed_root_cmds.yaml` (YAML, not auto-created):
+  - Must be owned by current UID with permissions 0600 (security validation)
+  - Can override whitelist and set preferred default command
+  - Each entry validated: only `[a-zA-Z0-9_-]` characters allowed
+- Auto-detection order: config `default` → `which` over whitelist → fallback `sudo`
 
 ---
 
@@ -117,15 +110,30 @@ the same mapper name, causing mount collisions.
 
 This preserves human-readable names while preventing collisions.
 
+Additionally, the Create LUKS branch (previously using inline `sq_<timestamp>_<random>`)
+now also calls `generate_mapper_name()` for consistent collision-safe behavior.
+
 ---
 
-## #6. Code Duplication in `check_read_permissions` / `ensure_read_permissions` [CODE QUALITY] -- DEFERRED
+## #6. Code Duplication in `check_read_permissions` / `ensure_read_permissions` [CODE QUALITY] -- FIXED
 
 **File:** `src/utils.rs`
 
 **Problem:**
-Two nearly identical functions. In `ensure_read_permissions`, the `PermissionDenied`
-branch returns the same `Err(ZksError::IoError(e))` as the generic branch, making
-the conditional check redundant.
+Two nearly identical functions (~20 lines each). In `ensure_read_permissions`, the
+`PermissionDenied` branch returned the same `Err(ZksError::IoError(e))` as the generic
+branch, making the conditional check redundant.
 
-**Status:** Noted for future cleanup (separate commit).
+**Fix:**
+`ensure_read_permissions` now delegates to `check_read_permissions`:
+```rust
+pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
+    if !check_read_permissions(paths)? {
+        return Err(ZksError::OperationFailed(
+            "Insufficient read permissions for one or more freeze targets".to_string(),
+        ));
+    }
+    Ok(())
+}
+```
+Eliminates ~15 lines of duplicated logic.

@@ -1,0 +1,9 @@
+ default: ""
+ allowed:
+   - sudo
+   - doas
+   - sudo-rs
+   - run0
+   - pkexec
+   - please
+

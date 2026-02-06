@@ -196,24 +196,10 @@ pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool, ZksError> {
 }
 
 pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
-    for path in paths {
-        let metadata = fs::metadata(path).map_err(|_| ZksError::InvalidPath(path.clone()))?;
-
-        if metadata.is_dir() {
-            if let Err(e) = fs::read_dir(path) {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    return Err(ZksError::IoError(e));
-                }
-                return Err(ZksError::IoError(e));
-            }
-        } else {
-            if let Err(e) = fs::File::open(path) {
-                if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    return Err(ZksError::IoError(e));
-                }
-                return Err(ZksError::IoError(e));
-            }
-        }
+    if !check_read_permissions(paths)? {
+        return Err(ZksError::OperationFailed(
+            "Insufficient read permissions for one or more freeze targets".to_string(),
+        ));
     }
     Ok(())
 }

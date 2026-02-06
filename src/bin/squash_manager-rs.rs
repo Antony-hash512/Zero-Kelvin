@@ -10,13 +10,128 @@ use std::process;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
-use zero_kelvin_stazis::constants::{DEFAULT_ZSTD_COMPRESSION, LUKS_HEADER_SIZE, LUKS_SAFETY_BUFFER};
+use zero_kelvin_stazis::constants::{ALLOWED_ROOT_CMDS, DEFAULT_ZSTD_COMPRESSION, LUKS_HEADER_SIZE, LUKS_SAFETY_BUFFER};
 use zero_kelvin_stazis::executor::{CommandExecutor, RealSystem};
 
 /// Global path for cleanup on interrupt (SIGINT/SIGTERM)
 /// Used by ctrlc handler to remove incomplete output files
 static CLEANUP_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static CLEANUP_MAPPER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+#[derive(serde::Deserialize)]
+struct RootCmdConfig {
+    #[serde(default)]
+    default: String,
+    #[serde(default)]
+    allowed: Vec<String>,
+}
+
+/// Validate that a command name contains only safe characters: [a-zA-Z0-9_-]
+fn is_valid_cmd_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Load optional config from ~/.config/stazis/allowed_root_cmds.yaml
+/// Returns None if file doesn't exist or fails validation.
+fn load_root_cmd_config() -> Option<RootCmdConfig> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let config_dir = env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            let home = env::var("HOME").unwrap_or_default();
+            format!("{}/.config", home)
+        });
+    let config_path = PathBuf::from(config_dir).join("stazis/allowed_root_cmds.yaml");
+
+    if !config_path.exists() {
+        return None;
+    }
+
+    // Security: verify file is not a symlink, owned by us, and not world-readable
+    let meta = match fs::symlink_metadata(&config_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "Warning: cannot stat config {:?}: {}",
+                config_path, e
+            );
+            return None;
+        }
+    };
+
+    if meta.file_type().is_symlink() {
+        eprintln!(
+            "Warning: config {:?} is a symlink, ignoring for security.",
+            config_path
+        );
+        return None;
+    }
+
+    let uid = unsafe { libc::getuid() };
+    if meta.uid() != uid {
+        eprintln!(
+            "Warning: config {:?} is owned by uid {} (expected {}), ignoring.",
+            config_path,
+            meta.uid(),
+            uid
+        );
+        return None;
+    }
+
+    let mode = meta.permissions().mode();
+    if mode & 0o077 != 0 {
+        eprintln!(
+            "Warning: config {:?} has insecure permissions {:04o} (expected 0600), ignoring.",
+            config_path,
+            mode & 0o777
+        );
+        return None;
+    }
+
+    let content = match fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: cannot read config {:?}: {}", config_path, e);
+            return None;
+        }
+    };
+
+    let config: RootCmdConfig = match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Warning: invalid YAML in {:?}: {}", config_path, e);
+            return None;
+        }
+    };
+
+    // Validate allowed list entries
+    for cmd in &config.allowed {
+        if !is_valid_cmd_name(cmd) {
+            eprintln!(
+                "Warning: invalid command name '{}' in config {:?}, ignoring entire config.",
+                cmd, config_path
+            );
+            return None;
+        }
+    }
+
+    // Validate default is in allowed list (if set)
+    if !config.default.is_empty() && !config.allowed.iter().any(|c| c == &config.default) {
+        eprintln!(
+            "Warning: default '{}' is not in allowed list in {:?}, ignoring entire config.",
+            config.default, config_path
+        );
+        return None;
+    }
+
+    Some(config)
+}
 
 fn get_effective_root_cmd() -> Vec<String> {
     // Check if we are root via 'id -u'
@@ -29,24 +144,46 @@ fn get_effective_root_cmd() -> Vec<String> {
             }
         }
     }
-    
-    // Check env var
+
+    // Load config (if present) to get whitelist and preferred default
+    let config = load_root_cmd_config();
+    let whitelist: Vec<&str> = match &config {
+        Some(cfg) if !cfg.allowed.is_empty() => cfg.allowed.iter().map(|s| s.as_str()).collect(),
+        _ => ALLOWED_ROOT_CMDS.to_vec(),
+    };
+    let preferred = config.as_ref().map(|c| c.default.as_str()).unwrap_or("");
+
+    // Check ROOT_CMD env var — validate against whitelist
     if let Ok(cmd) = std::env::var("ROOT_CMD") {
-         if !cmd.trim().is_empty() {
-             return cmd.split_whitespace().map(|s| s.to_string()).collect();
-         }
+        let cmd = cmd.trim().to_string();
+        if !cmd.is_empty() {
+            let first_word = cmd.split_whitespace().next().unwrap_or("");
+            if whitelist.contains(&first_word) {
+                return cmd.split_whitespace().map(|s| s.to_string()).collect();
+            } else {
+                eprintln!(
+                    "Warning: ROOT_CMD='{}' is not in the allowed whitelist {:?}. Ignoring.",
+                    first_word, whitelist
+                );
+            }
+        }
     }
 
-    // Auto-detect doas or run0 or sudo
-    let candidates = ["doas", "run0", "sudo"];
-    for candidate in &candidates {
-         // check if exists in path
-         if let Ok(_path) = which::which(candidate) {
-             return vec![candidate.to_string()];
-         }
+    // Use preferred from config (if set and available in PATH)
+    if !preferred.is_empty() {
+        if let Ok(_path) = which::which(preferred) {
+            return vec![preferred.to_string()];
+        }
     }
 
-    // Default to sudo if nothing found (legacy behavior)
+    // Auto-detect: find first available command from whitelist
+    for candidate in &whitelist {
+        if let Ok(_path) = which::which(candidate) {
+            return vec![candidate.to_string()];
+        }
+    }
+
+    // Fallback to sudo (legacy behavior)
     vec!["sudo".to_string()]
 }
 
@@ -807,10 +944,7 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 }
 
                 // 3. Open
-                // Generate tmp name
-                let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-                let rnd: u32 = rand::rng().random_range(1000..9999);
-                let mapper_name = format!("sq_{}_{}", timestamp, rnd);
+                let mapper_name = generate_mapper_name(&output_buf);
                 
                 println!("Opening LUKS container...");
                 let mut open_args = root_cmd.clone();
