@@ -1732,9 +1732,17 @@ mod tests {
         let output_str_3 = output_str.clone();
         mock.expect_run_interactive()
             .withf(move |program, args| {
-                 // get_effective_root_cmd returns ["sudo"] by default if not root
-                 program == "cryptsetup" && args == vec!["luksFormat", "-q", output_str_3.as_str()]
-                 || program == "sudo" && args == vec!["cryptsetup", "luksFormat", "-q", output_str_3.as_str()]
+                 // Check if program is a known runner or direct call
+                 let is_runner = ["sudo", "doas", "run0"].contains(&program);
+                 let is_direct = program == "cryptsetup";
+                 
+                 if is_direct {
+                     args == vec!["luksFormat", "-q", output_str_3.as_str()]
+                 } else if is_runner {
+                     args == vec!["cryptsetup", "luksFormat", "-q", output_str_3.as_str()]
+                 } else {
+                     false
+                 }
             })
             .times(1)
             .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
@@ -1743,9 +1751,20 @@ mod tests {
         let output_str_4 = output_str.clone();
         mock.expect_run_interactive()
             .withf(move |program, args| {
-                (program == "cryptsetup" || program == "sudo") &&
-                args.contains(&"open") &&
-                args.contains(&output_str_4.as_str())
+                let is_runner = ["sudo", "doas", "run0"].contains(&program);
+                let is_direct = program == "cryptsetup";
+                
+                let check_args = |a: &&[&str]| a.contains(&"open") && a.contains(&output_str_4.as_str());
+
+                if is_direct {
+                    check_args(&args)
+                } else if is_runner {
+                    // Args should contain cryptsetup, open, path... 
+                    // But args to runner are ["cryptsetup", "open", ...]
+                    args.contains(&"cryptsetup") && args.contains(&"open") && args.contains(&output_str_4.as_str())
+                } else {
+                    false
+                }
             })
             .times(1)
             .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
@@ -1754,8 +1773,16 @@ mod tests {
         // output to /dev/mapper/...
         mock.expect_run()
             .withf(move |program, args| {
-                 (program == "mksquashfs" || program == "sudo") &&
-                 args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
+                 let is_runner = ["sudo", "doas", "run0"].contains(&program);
+                 let is_direct = program == "mksquashfs";
+                 
+                 if is_direct {
+                     args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
+                 } else if is_runner {
+                     args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
+                 } else {
+                     false
+                 }
             })
             .times(1)
             .returning(|_, _| Ok(Output {
@@ -1808,8 +1835,16 @@ mod tests {
         // 8.3 close (from LuksTransaction drop)
         mock.expect_run()
             .withf(|program, args| {
-                (program == "cryptsetup" || program == "sudo") && 
-                args.contains(&"close")
+                let is_runner = ["sudo", "doas", "run0"].contains(&program);
+                let is_direct = program == "cryptsetup";
+                
+                if is_direct {
+                    args.contains(&"close")
+                } else if is_runner {
+                    args.contains(&"cryptsetup") && args.contains(&"close")
+                } else {
+                    false
+                }
             })
             .times(1)
             .returning(|_, _| Ok(Output {

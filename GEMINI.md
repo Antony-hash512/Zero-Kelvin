@@ -551,7 +551,8 @@ src/
 ├── engine.rs           # Реализация команд (freeze, unfreeze и т.д.) и парсинг агрументов через оркестрацию внешних процессов
 ├── executor.rs         # Абстракция CommandExecutor над std::process::Command (Real vs Mock)
 ├── manifest.rs         # Работа с YAML
-├── utils.rs            # # Мелкие утилиты (проверка root, поиск путей)
+├── utils.rs            # Мелкие утилиты (проверка root, поиск путей)
+├── error.rs            # Тексты ошибок
 └── constants.rs        # Константы
 ```
 

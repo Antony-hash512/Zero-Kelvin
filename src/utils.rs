@@ -4,9 +4,13 @@ use log::warn;
 
 // Stub implementation for TDD phase
 
-pub fn is_root() -> Result<bool> {
+pub fn get_current_uid() -> Result<u32> {
     let content = fs::read_to_string("/proc/self/status")?;
-    let euid = parse_uid_from_status(&content)?;
+    parse_uid_from_status(&content)
+}
+
+pub fn is_root() -> Result<bool> {
+    let euid = get_current_uid()?;
     Ok(euid == 0)
 }
 

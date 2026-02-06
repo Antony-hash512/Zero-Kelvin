@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, Context, anyhow};
 use crate::executor::CommandExecutor;
 use crate::manifest::{Manifest, Metadata, FileEntry, PrivilegeMode};
+use crate::error::ZksError;
 use crate::utils;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use fs2::FileExt; // For flock
 // rand is in Cargo.toml
 use tempfile;
@@ -12,20 +14,32 @@ use log::{warn, info};
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
-pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File)> {
-    // 1. Resolve XDG_CACHE_HOME
-    let cache_root = get_cache_dir()?;
-    let app_cache = cache_root.join("zero-kelvin-stazis");
+pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File), ZksError> {
+    // 1. Resolve Staging Root: /tmp/stazis-<uid>
+    let uid = utils::get_current_uid().map_err(ZksError::Unknown)?;
+    let staging_root = std::path::PathBuf::from(format!("/tmp/stazis-{}", uid));
     
-    // 2. Create unique build directory: build_<timestamp>_<random>
+    // Ensure root exists with 0700 permissions
+    if !staging_root.exists() {
+        fs::create_dir_all(&staging_root).map_err(ZksError::IoError)?;
+    }
+    
+    let mut perms = fs::metadata(&staging_root)?.permissions();
+    if perms.mode() & 0o777 != 0o700 {
+        perms.set_mode(0o700);
+        fs::set_permissions(&staging_root, perms).map_err(ZksError::IoError)?;
+    }
+
+    // 2. Create unique build directory: /tmp/stazis-<uid>/build_<timestamp>_<random>
     let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ZksError::Unknown(anyhow!(e)))?
         .as_secs();
     let random_id: u32 = rand::random();
     let build_dir_name = format!("build_{}_{}", timestamp, random_id);
-    let build_dir = app_cache.join(build_dir_name);
+    let build_dir = staging_root.join(build_dir_name);
     
-    fs::create_dir_all(&build_dir).context("Failed to create build directory")?;
+    fs::create_dir_all(&build_dir).map_err(|e| ZksError::StagingError(format!("Failed to create build dir: {:?} ({})", build_dir, e)))?;
 
     // 2.1 Create and Lock .lock file
     let lock_path = build_dir.join(".lock");
@@ -96,15 +110,15 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
 /// Tries to garbage collect old staging directories.
 /// Iterates over subdirectories in the cache. Tries to acquire non-blocking exclusive lock on .lock.
 /// If successful, it means the process is dead, so we delete the directory.
-pub fn try_gc_staging() -> Result<()> {
-    let cache_root = get_cache_dir()?;
-    let app_cache = cache_root.join("zero-kelvin-stazis");
-
-    if !app_cache.exists() {
+pub fn try_gc_staging() -> Result<(), ZksError> {
+    let uid = utils::get_current_uid().map_err(ZksError::Unknown)?;
+    let staging_root = std::path::PathBuf::from(format!("/tmp/stazis-{}", uid));
+    
+    if !staging_root.exists() {
         return Ok(());
     }
 
-    for entry in fs::read_dir(app_cache)? {
+    for entry in fs::read_dir(&staging_root).map_err(ZksError::IoError)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -147,15 +161,7 @@ pub fn try_gc_staging() -> Result<()> {
     Ok(())
 }
 
-fn get_cache_dir() -> Result<PathBuf> {
-    std::env::var("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|_| {
-            std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".cache"))
-                .map_err(|_| anyhow!("Neither XDG_CACHE_HOME nor HOME set"))
-        })
-}
+
 
 fn get_hostname() -> Result<String> {
     std::process::Command::new("uname")
@@ -197,19 +203,19 @@ pub fn check<E: CommandExecutor>(
     archive_path: &Path,
     options: &CheckOptions,
     executor: &E,
-) -> Result<()> {
+) -> Result<(), ZksError> {
     // 1. Mount Archive
     let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
     let mount_point = mount_dir.path();
     
     let status = executor.run_interactive("squash_manager-rs", &[
         "mount",
-        archive_path.to_str().ok_or(anyhow!("Invalid archive path encoding"))?,
-        mount_point.to_str().ok_or(anyhow!("Invalid mount point path encoding"))?
-    ])?;
+        archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?,
+        mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
+    ]).map_err(ZksError::Unknown)?;
     
     if !status.success() {
-        return Err(anyhow!("Failed to mount archive"));
+        return Err(ZksError::OperationFailed("Failed to mount archive".into()));
     }
     
     // Ensure unmount
@@ -226,11 +232,11 @@ pub fn check<E: CommandExecutor>(
     // 2. Read Manifest
     let manifest_path = mount_point.join("list.yaml");
     if !manifest_path.exists() {
-        return Err(anyhow!("Archive missing list.yaml - invalid format"));
+        return Err(ZksError::OperationFailed("Archive missing list.yaml - invalid format".into()));
     }
-    let f = fs::File::open(&manifest_path)?;
-    let manifest: Manifest = serde_yaml::from_reader(f)?;
-    manifest.validate()?;
+    let f = fs::File::open(&manifest_path).map_err(ZksError::IoError)?;
+    let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZksError::ManifestError)?;
+    manifest.validate().map_err(ZksError::Unknown)?;
     
     // 3. Perform Check
     println!("Checking {} files from archive...", manifest.files.len());
@@ -326,7 +332,7 @@ fn check_item(
     stats_mismatch: &mut u32,
     stats_missing: &mut u32,
     stats_skipped: &mut u32,
-) -> Result<()> {
+) -> Result<(), ZksError> {
     let display_name = live_path.display().to_string();
 
     // MISSING check
@@ -435,10 +441,10 @@ fn check_item(
     Ok(())
 }
 
-fn compare_files(p1: &Path, p2: &Path) -> Result<bool> {
+fn compare_files(p1: &Path, p2: &Path) -> Result<bool, ZksError> {
     use std::io::Read;
-    let f1 = fs::File::open(p1)?;
-    let f2 = fs::File::open(p2)?;
+    let f1 = fs::File::open(p1).map_err(ZksError::IoError)?;
+    let f2 = fs::File::open(p2).map_err(ZksError::IoError)?;
     
     // Use BufReader logic
     let mut b1 = std::io::BufReader::new(f1);
@@ -464,7 +470,7 @@ pub fn unfreeze<E: CommandExecutor>(
     archive_path: &Path,
     options: &UnfreezeOptions,
     executor: &E,
-) -> Result<()> {
+) -> Result<(), ZksError> {
     // 1. Create temporary mount point
     let mount_dir = tempfile::tempdir().context("Failed to create temporary mount directory")?;
     let mount_point = mount_dir.path();
@@ -472,12 +478,12 @@ pub fn unfreeze<E: CommandExecutor>(
     // 2. Mount Archive
     let status = executor.run_interactive("squash_manager-rs", &[
         "mount", 
-        archive_path.to_str().ok_or(anyhow!("Invalid archive path encoding"))?, 
-        mount_point.to_str().ok_or(anyhow!("Invalid mount point path encoding"))?
-    ])?;
+        archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?, 
+        mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
+    ]).map_err(ZksError::Unknown)?;
 
     if !status.success() {
-        return Err(anyhow!("Failed to mount archive"));
+        return Err(ZksError::OperationFailed("Failed to mount archive".into()));
     }
 
     // Ensure we unmount even if errors occur later
@@ -498,11 +504,11 @@ fn restore_from_mount<E: CommandExecutor>(
     mount_point: &Path,
     options: &UnfreezeOptions,
     executor: &E
-) -> Result<()> {
+) -> Result<(), ZksError> {
     // 3. Read Manifest
     let manifest_path = mount_point.join("list.yaml");
     if !manifest_path.exists() {
-        return Err(anyhow!("Archive missing list.yaml - invalid format"));
+        return Err(ZksError::OperationFailed("Archive missing list.yaml - invalid format".into()));
     }
     
     let f = fs::File::open(&manifest_path)?;
@@ -524,7 +530,7 @@ fn restore_from_mount<E: CommandExecutor>(
              let parent = p.parent().unwrap_or(Path::new("/")).to_path_buf();
              (p, parent)
         } else {
-             return Err(anyhow!("Invalid entry {}: missing path info", entry.id));
+             return Err(ZksError::OperationFailed(format!("Invalid entry {}: missing path info", entry.id)));
         };
         
         // Derive name if missing (Legacy)
@@ -554,7 +560,7 @@ fn restore_from_mount<E: CommandExecutor>(
                      continue;
                  }
              } else if !options.overwrite {
-                 return Err(anyhow!("File exists: {:?}. Use --overwrite to replace/merge.", dest_path));
+                 return Err(ZksError::OperationFailed(format!("File exists: {:?}. Use --overwrite to replace/merge.", dest_path)));
              }
         }
         
@@ -563,18 +569,18 @@ fn restore_from_mount<E: CommandExecutor>(
              if let Err(_) = fs::create_dir_all(&restore_parent) {
                   // Fallback to sudo mkdir -p
                   if let Some(runner) = utils::check_root_or_get_runner("Parent directory creation requires root")? {
-                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().ok_or(anyhow!("Invalid parent path"))?])?;
+                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().ok_or(ZksError::InvalidPath(restore_parent.clone()))?])?;
                        if !status.success() {
-                           return Err(anyhow!("Failed to create directory {:?}", restore_parent));
+                           return Err(ZksError::OperationFailed(format!("Failed to create directory {:?}", restore_parent)));
                        }
                   } else {
-                       return Err(anyhow!("Failed to create directory {:?}", restore_parent));
+                       return Err(ZksError::OperationFailed(format!("Failed to create directory {:?}", restore_parent)));
                   }
              }
         }
 
-        let src_str = src_path.to_str().ok_or(anyhow!("Invalid source path encoding"))?;
-        let dest_str = dest_path.to_str().ok_or(anyhow!("Invalid dest path encoding"))?;
+        let src_str = src_path.to_str().ok_or(ZksError::InvalidPath(src_path.clone()))?;
+        let dest_str = dest_path.to_str().ok_or(ZksError::InvalidPath(dest_path.clone()))?;
         
         println!("Restoring {} -> {}", src_path.display(), dest_path.display());
 
@@ -609,11 +615,11 @@ fn restore_from_mount<E: CommandExecutor>(
                   
                   let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
                   if !status.success() {
-                      return Err(anyhow!("Failed to restore {:?}: rsync failed even with sudo", dest_path));
+                      return Err(ZksError::OperationFailed(format!("Failed to restore {:?}: rsync failed even with sudo", dest_path)));
                   }
              } else {
                   // Already tried as root or no runner, and failed
-                   return Err(anyhow!("Failed to restore {:?}", dest_path));
+                   return Err(ZksError::OperationFailed(format!("Failed to restore {:?}", dest_path)));
              }
         }
     }
@@ -625,7 +631,7 @@ pub fn freeze<E: CommandExecutor>(
     targets: &[PathBuf],
     options: &FreezeOptions,
     executor: &E,
-) -> Result<()> {
+) -> Result<(), ZksError> {
     // 0. Auto-GC: Cleanup stale build directories (protected by flock)
     if let Err(e) = try_gc_staging() {
         warn!("GC Error: {}", e); 
@@ -638,8 +644,8 @@ pub fn freeze<E: CommandExecutor>(
     // 2. Read Manifest
     let payload_dir = build_dir.join(&payload_name);
     let manifest_path = payload_dir.join("list.yaml");
-    let f = fs::File::open(&manifest_path)?;
-    let manifest: Manifest = serde_yaml::from_reader(f)?;
+    let f = fs::File::open(&manifest_path).map_err(ZksError::IoError)?;
+    let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZksError::ManifestError)?;
     
     // 3. Generate internal script
     let script = generate_freeze_script(&manifest, &build_dir, &payload_name, options)?;
@@ -649,13 +655,13 @@ pub fn freeze<E: CommandExecutor>(
     // 4. Run unshare
     let args = vec![
         "-m", "-U", "-r", "--propagation", "private",
-        "sh", script_path.to_str().ok_or(anyhow!("Invalid script path"))?
+        "sh", script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?
     ];
     
-    let status = executor.run_interactive("unshare", &args)?;
+    let status = executor.run_interactive("unshare", &args).map_err(ZksError::Unknown)?;
     
     if !status.success() {
-         return Err(anyhow!("Freeze process failed (unshare/squash_manager returned non-zero exit code)"));
+         return Err(ZksError::OperationFailed("Freeze process failed".into()));
     }
     
     // Cleanup Staging Area
@@ -671,7 +677,7 @@ fn generate_freeze_script(
     build_dir: &Path,
     payload_name: &str,
     options: &FreezeOptions,
-) -> Result<String> {
+) -> Result<String, ZksError> {
     let mut script = String::new();
     script.push_str("#!/bin/sh\n");
     script.push_str("set -e\n"); // Exit on error
