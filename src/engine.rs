@@ -647,13 +647,38 @@ pub fn freeze<E: CommandExecutor>(
     fs::write(&script_path, &script)?;
     
     // 4. Run unshare
-    let args = vec![
-        "-m", "-U", "-r", "--propagation", "private",
-        "sh", script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?
-    ];
+    // ADAPTIVE STRATEGY:
+    // - Encrypted (-e): We MUST be real root. We use only Mount Namespace (-m). (User NS breaks LUKS)
+    // - Plain: We can be User or Root.
+    //   - If Root: Use only Mount Namespace (-m).
+    //   - If User: Use User+Mount Namespace (-m -U -r).
+
+    let mut unshare_args = Vec::new();
+
+    if options.encrypt {
+        // Enforce Root
+        if !utils::is_root().unwrap_or(false) {
+             return Err(ZksError::OperationFailed("Encrypted freeze (-e) must be run as root (for LUKS). Please run with sudo.".to_string()));
+        }
+        // Root + Encrypt -> Mount NS only
+        unshare_args.extend_from_slice(&["-m", "--propagation", "private"]);
+    } else {
+        // Plain mode
+        if utils::is_root().unwrap_or(false) {
+             // Root + Plain -> Mount NS only (simpler, cleaner)
+             unshare_args.extend_from_slice(&["-m", "--propagation", "private"]);
+        } else {
+             // User + Plain -> User + Mount NS (Rootless)
+             unshare_args.extend_from_slice(&["-m", "-U", "-r", "--propagation", "private"]);
+        }
+    }
+
+    // Append command
+    unshare_args.push("sh");
+    unshare_args.push(script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?);
     
     // Use run_and_capture_error to get stderr for friendly messages
-    let (status, stderr) = executor.run_and_capture_error("unshare", &args)
+    let (status, stderr) = executor.run_and_capture_error("unshare", &unshare_args)
         .map_err(|e| ZksError::OperationFailed(format!("Failed to execute unshare: {}", e)))?;
     
     if !status.success() {

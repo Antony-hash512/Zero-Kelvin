@@ -79,4 +79,11 @@ EOF
     # 4. Verify
     assert_success
     assert_output --partial "MOCK_SUDO_DETECTED"
+    
+    # We might see either the engine's error OR the squash_manager's error depending on how deep it got.
+    # But since we mock squash_manager to return the specific known error, and engine now ALSO checks...
+    # Actually, the ENGINE check happens BEFORE calling squash_manager.
+    # So we should see the ENGINE's error "must be run as root (for LUKS)".
+    # The squash_manager error is "LUKS creation requires root privileges: must be run as root".
+    # Both contain "must be run as root".
 }
