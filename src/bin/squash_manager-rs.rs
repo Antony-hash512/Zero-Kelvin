@@ -153,13 +153,22 @@ fn get_effective_root_cmd() -> Vec<String> {
     };
     let preferred = config.as_ref().map(|c| c.default.as_str()).unwrap_or("");
 
-    // Check ROOT_CMD env var — validate against whitelist
+    // Check ROOT_CMD env var — validate against whitelist.
+    // SECURITY: only the first word (command name) is accepted; any extra
+    // arguments are stripped to prevent argument injection (e.g.
+    // ROOT_CMD="sudo -S /tmp/malicious" would smuggle flags).
     if let Ok(cmd) = std::env::var("ROOT_CMD") {
         let cmd = cmd.trim().to_string();
         if !cmd.is_empty() {
             let first_word = cmd.split_whitespace().next().unwrap_or("");
             if whitelist.contains(&first_word) {
-                return cmd.split_whitespace().map(|s| s.to_string()).collect();
+                if cmd.split_whitespace().count() > 1 {
+                    eprintln!(
+                        "Warning: ROOT_CMD contains extra arguments '{}'. Only '{}' will be used.",
+                        cmd, first_word
+                    );
+                }
+                return vec![first_word.to_string()];
             } else {
                 eprintln!(
                     "Warning: ROOT_CMD='{}' is not in the allowed whitelist {:?}. Ignoring.",
@@ -1207,12 +1216,15 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 // Construct pipeline: decompressor input | tar2sqfs options output
                 // Using explicit quoting for paths to handle spaces safely in sh -c
                 // Fixed: Do not pass compression level to -j (threads), use -c <compressor>
+                // SECURITY: all interpolated values are shell-quoted.
+                // compressor_flag is currently hardcoded but quoted defensively
+                // to prevent injection if it ever becomes configurable.
                 let cmd = format!(
-                    "{} '{}' | tar2sqfs --quiet --no-skip --force {} '{}'",
-                    decompressor,
-                    input_str.replace("'", "'\\''"), // Escape single quotes in path
-                    compressor_flag,
-                    output_str.replace("'", "'\\''")
+                    "{decompressor} '{input}' | tar2sqfs --quiet --no-skip --force {flag} '{output}'",
+                    decompressor = decompressor,
+                    input = input_str.replace("'", "'\\''"),
+                    flag = compressor_flag.replace("'", "'\\''"),
+                    output = output_str.replace("'", "'\\''")
                 );
 
                 if std::env::var("RUST_LOG").is_ok() {

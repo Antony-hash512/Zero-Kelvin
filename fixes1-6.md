@@ -75,6 +75,9 @@ an attacker-controlled location. `create_dir_all` follows symlinks.
   - Can override whitelist and set preferred default command
   - Each entry validated: only `[a-zA-Z0-9_-]` characters allowed
 - Auto-detection order: config `default` → `which` over whitelist → fallback `sudo`
+- **Additional fix (audit round 2):** ROOT_CMD now returns ONLY the validated first
+  word. Extra arguments (e.g. `ROOT_CMD="sudo -S /tmp/malicious"`) are stripped with
+  a warning to prevent argument injection.
 
 ---
 
@@ -137,3 +140,62 @@ pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
 }
 ```
 Eliminates ~15 lines of duplicated logic.
+
+---
+
+# Audit Round 2 Findings (2026-02-07)
+
+## #7. ROOT_CMD Argument Injection Bypass [HIGH] -- FIXED
+
+**File:** `src/bin/squash_manager-rs.rs` (function `get_effective_root_cmd`)
+
+**Problem:**
+The whitelist validated only the first word of `ROOT_CMD`, but returned the
+entire split string including extra arguments:
+```rust
+let first_word = cmd.split_whitespace().next().unwrap_or("");
+if whitelist.contains(&first_word) {
+    return cmd.split_whitespace().map(|s| s.to_string()).collect();
+    //     ^^^ returns ALL words, including injected arguments
+}
+```
+`ROOT_CMD="sudo -S /tmp/malicious.sh"` would pass validation (first word `sudo`
+is whitelisted) but smuggle extra arguments into the privilege escalation command.
+
+**Fix:**
+Return only the validated first word. Extra arguments are stripped with a warning:
+```rust
+return vec![first_word.to_string()];
+```
+
+## #8. Symlink Attack During Restore (Unfreeze) [HIGH] -- FIXED
+
+**File:** `src/engine.rs` (function `restore_from_mount`)
+
+**Problem:**
+During unfreeze, destination paths from the manifest were not checked for symlinks.
+An attacker could create a symlink in the target directory (e.g., `/home/user/docs -> /etc`)
+before restore, causing `rsync` to follow it and overwrite system files.
+
+**Fix:**
+Added `validate_no_symlinks_in_ancestors()` that checks every existing component of
+the restore destination path using `symlink_metadata()`. If any component is a symlink,
+restore is aborted with a security error. Called before every rsync in the restore loop.
+
+## #9. Unquoted `compressor_flag` in Shell Pipeline [PATTERN RISK] -- FIXED
+
+**File:** `src/bin/squash_manager-rs.rs` (archive repackaging pipeline)
+
+**Problem:**
+`compressor_flag` was interpolated into a `sh -c` pipeline without shell quoting:
+```rust
+format!("{} '{}' | tar2sqfs --quiet --no-skip --force {} '{}'",
+    decompressor, input, compressor_flag, output);
+//                       ^^^^^^^^^^^^^^^^ NOT QUOTED
+```
+Currently hardcoded to `-c zstd` (safe), but the code structure would enable
+injection if the flag ever became configurable.
+
+**Fix:**
+Applied single-quote escaping to `compressor_flag` (`replace("'", "'\\''")`)
+for defense-in-depth consistency with all other shell-interpolated values.

@@ -491,6 +491,37 @@ pub fn unfreeze<E: CommandExecutor>(
     restore_from_mount(mount_point, options, executor)
 }
 
+/// SECURITY: Verify that none of the existing ancestor components of `path`
+/// are symlinks. This prevents symlink-based redirect attacks during restore
+/// (e.g. attacker creates /home/user/docs -> /etc, then restore overwrites
+/// /etc/passwd). Only existing path components are checked — if a parent
+/// directory does not exist yet (we create it ourselves), it cannot be a symlink.
+fn validate_no_symlinks_in_ancestors(path: &Path) -> Result<(), ZksError> {
+    let mut checked = PathBuf::new();
+    for component in path.components() {
+        checked.push(component);
+        match fs::symlink_metadata(&checked) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(ZksError::OperationFailed(format!(
+                        "Security: restore path component {:?} is a symlink. \
+                         This could redirect writes to unintended locations. Aborting.",
+                        checked
+                    )));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Component doesn't exist yet — will be created by us, safe to proceed
+                break;
+            }
+            Err(e) => {
+                return Err(ZksError::IoError(e));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn restore_from_mount<E: CommandExecutor>(
     mount_point: &Path,
     options: &UnfreezeOptions,
@@ -537,7 +568,12 @@ fn restore_from_mount<E: CommandExecutor>(
             .join(entry_name);
 
         println!("Restoring: {:?} -> {:?}", entry_name, dest_path);
-        
+
+        // SECURITY: verify no symlinks in the restore destination path.
+        // Prevents attacker from creating e.g. /home/user/docs -> /etc
+        // to redirect restore writes to system directories.
+        validate_no_symlinks_in_ancestors(&dest_path)?;
+
         // Conflict Check
         let mut extra_rsync_flags = Vec::new();
 
