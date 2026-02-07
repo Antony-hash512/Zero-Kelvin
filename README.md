@@ -102,7 +102,7 @@ zks-rs check --force-delete /mnt/nas/archives/old-work.sqfs
 
 ### 📜 License
 
-This project is licensed under the **GPLv3 License**. See [LICENSE.GPLv3]([LICENSE.GPLv3]) for details.
+This project uses a dual licensing model: code is under the **GPLv3 License**, and documentation (including this README) is under the [GNU Free Documentation License 1.3](LICENSE.docs). See [LICENSE.GPLv3](LICENSE.GPLv3) for code and [LICENSE.docs](LICENSE.docs) for documentation details.
 
 ---
 
@@ -202,4 +202,4 @@ zks-rs check --force-delete /mnt/nas/archives/old-work.sqfs
 
 ### 📜 Юридические условия использования
 
-Этот проект лицензирован под **GPLv3 License**. Текст условий использования: [LICENSE.GPLv3]([LICENSE.GPLv3]).
+Этот проект использует двойную модель лицензирования: код находится под **лицензией GPLv3**, а документация (включая этот README) — под [GNU Free Documentation License 1.3](LICENSE.docs). Подробности смотрите в [LICENSE.GPLv3](LICENSE.GPLv3) для кода и в [LICENSE.docs](LICENSE.docs) для документации.
