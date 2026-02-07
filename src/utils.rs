@@ -1,6 +1,58 @@
 use crate::error::ZksError;
 use log::warn;
 use std::fs;
+use std::path::Path;
+
+pub enum ArchiveType {
+    Tar,
+    Gzip,
+    Bzip2,
+    Xz,
+    Zstd,
+    Zip,
+    SevenZ,
+    Rar,
+    Squashfs,
+    Unknown,
+}
+
+pub fn get_file_type(path: &Path) -> Result<ArchiveType, ZksError> {
+    if !path.exists() {
+        return Err(ZksError::InvalidPath(path.to_path_buf()));
+    }
+    
+    // Check using infer (magic numbers)
+    // We read the first few bytes
+    let kind = infer::get_from_path(path)
+        .map_err(|e| ZksError::IoError(e))?;
+        
+    match kind {
+        Some(k) => {
+            match k.mime_type() {
+                "application/x-tar" => Ok(ArchiveType::Tar),
+                "application/gzip" => Ok(ArchiveType::Gzip),
+                "application/x-bzip2" => Ok(ArchiveType::Bzip2),
+                "application/x-xz" => Ok(ArchiveType::Xz),
+                "application/zstd" => Ok(ArchiveType::Zstd),
+                "application/zip" => Ok(ArchiveType::Zip),
+                "application/x-7z-compressed" => Ok(ArchiveType::SevenZ),
+                "application/vnd.rar" => Ok(ArchiveType::Rar),
+                // "application/vnd.squashfs" ?? infer 0.15 might not have it, let's check extension if mime unknown for sqfs 
+                // OR custom check. infer supports squashfs since recent versions.
+                // mime type for squashfs is often just "application/octet-stream" or specialized.
+                // Let's check k.extension() just in case for squashfs
+                _ => {
+                     if k.extension() == "sqsh" || k.mime_type().contains("squashfs") {
+                         Ok(ArchiveType::Squashfs)
+                     } else {
+                         Ok(ArchiveType::Unknown)
+                     }
+                }
+            }
+        },
+        None => Ok(ArchiveType::Unknown),
+    }
+}
 
 // Stub implementation for TDD phase
 

@@ -794,9 +794,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             if final_output.exists() {
                 let is_luks = is_luks_image(&final_output, executor);
                 // Check valid SquashFS signature (magic number)
-                let is_sqfs = if let Ok(output) = executor.run("file", &[final_output.to_str().ok_or(ZksError::InvalidPath(final_output.clone()))?]) {
-                     String::from_utf8_lossy(&output.stdout).contains("Squashfs")
-                } else { false };
+                let is_sqfs = match zero_kelvin_stazis::utils::get_file_type(&final_output) {
+                     Ok(zero_kelvin_stazis::utils::ArchiveType::Squashfs) => true,
+                     _ => false,
+                };
 
                 if !overwrite_files && !overwrite_luks_content {
                      return Err(ZksError::OperationFailed("Output file exists.\nUse --overwrite-files to update content (append).\nUse --overwrite-luks-content to replace LUKS container payload.".to_string()));
@@ -1185,29 +1186,24 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
                 let output_str = output_buf.to_str().ok_or(ZksError::InvalidPath(final_output.clone()))?;
 
                 // Determine decompressor
-                let file_name = input_path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-
-                let decompressor = if file_name.ends_with(".tar") {
-                    "cat"
-                } else if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
-                    "gzip -dc"
-                } else if file_name.ends_with(".tar.bz2") || file_name.ends_with(".tbz2") {
-                     "bzip2 -dc"
-                } else if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
-                    "xz -dc"
-                } else if file_name.ends_with(".tar.zst") || file_name.ends_with(".tzst") {
-                    "zstd -dc"
-                } else if file_name.ends_with(".tar.zip") {
-                    "unzip -p"
-                } else if file_name.ends_with(".tar.7z") {
-                    "7z x -so"
-                } else if file_name.ends_with(".tar.rar") {
-                    "unrar p -inul"
-                } else {
-                    return Err(ZksError::CompressionError(format!("Unsupported archive format: {}", file_name)));
+                // Determine decompressor using infer (magic numbers)
+                use zero_kelvin_stazis::utils::ArchiveType;
+                let kind = zero_kelvin_stazis::utils::get_file_type(&input_path)?;
+                
+                let decompressor = match kind {
+                    ArchiveType::Tar => "cat",
+                    ArchiveType::Gzip => "gzip -dc",
+                    ArchiveType::Bzip2 => "bzip2 -dc",
+                    ArchiveType::Xz => "xz -dc",
+                    ArchiveType::Zstd => "zstd -dc",
+                    ArchiveType::Zip => "unzip -p",
+                    ArchiveType::SevenZ => "7z x -so",
+                    ArchiveType::Rar => "unrar p -inul",
+                    _ => {
+                         // Fallback to extension check if unknown (e.g. .tgz might detect as gzip, but maybe something eluded infer)
+                         // But for now, let's trust infer. If unknown, it's unsupported.
+                         return Err(ZksError::CompressionError(format!("Unsupported or unknown archive format for: {:?}", input_path)));
+                    }
                 };
 
                 // Determine compressor flag for tar2sqfs
@@ -1977,6 +1973,7 @@ mod tests {
 
         // 5. mksquashfs
         // output to /dev/mapper/...
+
         mock.expect_run()
             .withf(move |program, args| {
                  let is_runner = ["sudo", "doas", "run0"].contains(&program);
@@ -2208,6 +2205,81 @@ mod tests {
             },
         };
 
+        run(args, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_repack_archive_flow() {
+        // Test repacking a .tar.gz (Gzip)
+        // We must create a REAL valid gzip/tar file because `get_file_type` uses `infer` on real content.
+        
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_tar_gz = temp_dir.path().join("input.tar.gz");
+        let output_sqfs = temp_dir.path().join("output.sqfs");
+        
+        // precise path strings for expectation
+        let input_str = input_tar_gz.to_str().unwrap().to_string();
+        let output_str = output_sqfs.to_str().unwrap().to_string();
+
+        // 1. Create a valid small tar.gz
+        // We can use `tar` command if available, or just write some bytes if we knew gzip header.
+        // Assuming `tar` is available in build env.
+        let content_file = temp_dir.path().join("content.txt");
+        fs::write(&content_file, "hello").unwrap();
+        
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&input_tar_gz)
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("content.txt")
+            .status()
+            .expect("Failed to run tar for test setup");
+        assert!(status.success());
+        
+        let mut mock = MockCommandExecutor::new();
+        
+        // 2. Expect pipeline execution
+        // We know `infer` + `get_file_type` should detect Gzip -> "gzip -dc"
+        // Compressor: default zstd -> "-c zstd"
+        // Cmd: "gzip -dc 'input.tar.gz' | tar2sqfs --quiet --no-skip --force -c zstd 'output.sqfs'"
+        
+        // input_size needed for progress bar?
+        // It calls metadata().len().
+        
+        // EXPECTATION:
+        mock.expect_run_with_file_progress()
+            .withf(move |program, args, output_file, _, _| {
+                 program == "sh" &&
+                 args.len() == 2 &&
+                 args[0] == "-c" &&
+                 args[1].contains("gzip -dc") &&
+                 args[1].contains(&input_str) && // input path
+                 args[1].contains("tar2sqfs") &&
+                 args[1].contains("-c zstd") &&
+                 output_file.to_str().unwrap() == output_str
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| Ok(Output {
+                 status: std::process::ExitStatus::from_raw(0),
+                 stdout: vec![],
+                 stderr: vec![],
+            }));
+
+        let args = SquashManagerArgs {
+            command: Commands::Create {
+                input_path: input_tar_gz,
+                output_path: Some(output_sqfs),
+                encrypt: false,
+                compression: DEFAULT_ZSTD_COMPRESSION,
+                no_progress: false, // Default is progress bar
+                vanilla_progress: false,
+                alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
+            },
+        };
+        
         run(args, &mock).unwrap();
     }
 }
