@@ -61,7 +61,7 @@ teardown() {
     [ -f "$ARCHIVE_PATH" ]
 
     # 2. Check & Force Delete
-    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE_PATH\" --use-cmp --force-delete"
+    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE_PATH\" --use-cmp --delete"
     assert_success
     assert_output --partial "DELETED"
 

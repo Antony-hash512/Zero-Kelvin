@@ -45,7 +45,7 @@ teardown() {
 
     # 2. Check & Force Delete
     # This verifies the archive matches AND deletes the local source
-    run "$ZKS_BIN" check "$ARCHIVE_PATH" --use-cmp --force-delete
+    run "$ZKS_BIN" check "$ARCHIVE_PATH" --use-cmp --delete
     assert_success
     assert_output --partial "DELETED"
     

@@ -93,7 +93,7 @@ Compare an archive against the live system.
 zks-rs check /mnt/nas/archives/old-work.sqfs
 
 # Verify and safely delete local files that match the archive (Offloading)
-zks-rs check --force-delete /mnt/nas/archives/old-work.sqfs
+zks-rs check --delete /mnt/nas/archives/old-work.sqfs
 ```
 
 ---
@@ -199,7 +199,7 @@ zks-rs unfreeze /mnt/nas/archives/old-work.sqfs
 zks-rs check /mnt/nas/archives/old-work.sqfs
 
 # Проверка и безопасное удаление локальных файлов, совпадающих с архивом (Offloading)
-zks-rs check --force-delete /mnt/nas/archives/old-work.sqfs
+zks-rs check --delete /mnt/nas/archives/old-work.sqfs
 ```
 
 ---

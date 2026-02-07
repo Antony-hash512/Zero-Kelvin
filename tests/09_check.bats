@@ -79,7 +79,7 @@ teardown() {
     # Make local file newer
     touch -d "next hour" "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE" --force-delete
+    run zks-rs check "$ARCHIVE" --delete
     assert_success
     assert_output --partial "SKIPPED (Newer)"
     assert [ -f "$SRC/file1.txt" ]
@@ -91,7 +91,7 @@ teardown() {
     # Let's enforce local is OLDER to allow deletion (or same)
     touch -d "last hour" "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE" --force-delete
+    run zks-rs check "$ARCHIVE" --delete
     assert_success
     assert_output --partial "DELETED"
     assert [ ! -f "$SRC/file1.txt" ]

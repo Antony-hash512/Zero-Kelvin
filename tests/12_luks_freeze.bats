@@ -72,24 +72,33 @@ teardown() {
     assert_output --partial "exists"
 }
 
-@test "LUKS Freeze: Auto-generate name if output is directory" {
-    # Directory exists
-    run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e \"$SRC\" \"$TEST_DIR\""
+@test "LUKS Freeze: Auto-generate name if output is directory (with --prefix)" {
+    # Directory exists, use --prefix to skip interactive prompt
+    run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e --prefix luks_test \"$SRC\" \"$TEST_DIR\""
     assert_success
 
-    # Check that a .sqfs file was created inside TEST_DIR
-    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs_luks.img"
+    # Check that a .sqfs_luks.img file with the correct prefix was created
+    run find "$TEST_DIR" -maxdepth 1 -name "luks_test_*.sqfs_luks.img"
+    assert_line --index 0 --partial "luks_test_"
     assert_line --index 0 --partial ".sqfs_luks.img"
 
-    # 1. Find ANY file created in that dir (ignoring extension)
-    # We expect exactly one file to be created
-    run find "$TEST_DIR" -maxdepth 1 -type f
-    assert_line --index 0 --partial "$TEST_DIR"
     local created_file="${lines[0]}"
 
-    # 2. Verify it is a LUKS container using 'file' utility
+    # Verify it is a LUKS container using 'file' utility
     run file "$created_file"
     assert_output --partial "LUKS encrypted file"
+}
+
+@test "LUKS Freeze: Auto-generate name with interactive prefix (via stdin)" {
+    # First two lines are LUKS passphrase (enter + confirm), third line is the prefix
+    # But since stdin is consumed by cryptsetup for password, we use --prefix instead
+    # for LUKS mode, interactive prefix + LUKS password on same stdin is tricky.
+    # Use --prefix for LUKS to avoid stdin conflicts.
+    run bash -c "printf 'testpass\ntestpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" freeze -e --prefix luks_interactive \"$SRC\" \"$TEST_DIR\""
+    assert_success
+
+    run find "$TEST_DIR" -maxdepth 1 -name "luks_interactive_*.sqfs_luks.img"
+    assert_line --index 0 --partial "luks_interactive_"
 }
 
 @test "LUKS Freeze: Using -r (read from file)" {

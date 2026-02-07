@@ -1,21 +1,23 @@
-use std::path::{Path, PathBuf};
-use crate::executor::CommandExecutor;
-use crate::manifest::{Manifest, Metadata, FileEntry, PrivilegeMode};
 use crate::error::ZksError;
+use crate::executor::CommandExecutor;
+use crate::manifest::{FileEntry, Manifest, Metadata, PrivilegeMode};
 use crate::utils;
+use fs2::FileExt;
 use std::fs;
-use fs2::FileExt; // For flock
+use std::path::{Path, PathBuf}; // For flock
 // rand is in Cargo.toml
+use log::{info, warn};
 use tempfile;
-use log::{warn, info};
 
 /// Prepares the staging area for freezing.
 /// Creates a directory in XDG_CACHE_HOME, generates stubs for targets, and writes the manifest.
 /// Returns the path to the staging directory AND the locked .lock file handle (which must be kept alive).
-pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBuf, String, std::fs::File), ZksError> {
+pub fn prepare_staging(
+    targets: &[PathBuf],
+    dereference: bool,
+) -> Result<(PathBuf, String, std::fs::File), ZksError> {
     // 1. Resolve Staging Root: /tmp/stazis-<uid>
     let staging_root = utils::get_stazis_temp_dir()?;
-
 
     // 2. Create unique build directory: /tmp/stazis-<uid>/build_<timestamp>_<random>
     let timestamp = std::time::SystemTime::now()
@@ -25,72 +27,86 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
     let random_id: u32 = rand::random();
     let build_dir_name = format!("build_{}_{}", timestamp, random_id);
     let build_dir = staging_root.join(build_dir_name);
-    
-    fs::create_dir_all(&build_dir).map_err(|e| ZksError::StagingError(format!("Failed to create build dir: {:?} ({})", build_dir, e)))?;
+
+    fs::create_dir_all(&build_dir).map_err(|e| {
+        ZksError::StagingError(format!(
+            "Failed to create build dir: {:?} ({})",
+            build_dir, e
+        ))
+    })?;
 
     // 2.1 Create and Lock .lock file
     let lock_path = build_dir.join(".lock");
-    let lock_file = fs::File::create(&lock_path).map_err(|e| ZksError::StagingError(format!("Failed to create .lock file: {}", e)))?;
-    lock_file.lock_exclusive().map_err(|e| ZksError::StagingError(format!("Failed to acquire exclusive lock on staging directory: {}", e)))?;
+    let lock_file = fs::File::create(&lock_path)
+        .map_err(|e| ZksError::StagingError(format!("Failed to create .lock file: {}", e)))?;
+    lock_file.lock_exclusive().map_err(|e| {
+        ZksError::StagingError(format!(
+            "Failed to acquire exclusive lock on staging directory: {}",
+            e
+        ))
+    })?;
 
-    // 2.5 Create payload directory with meaningful name
-    // Use the first target's name as the payload directory name.
-    // This allows squash_manager-rs to auto-generate a meaningful filename (e.g., prefix_...)
-    // instead of generic "payload_...".
-    let payload_name = targets.first()
-        .and_then(|t| t.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("payload") // Fallback
-        .to_string();
+    // 2.5 Create payload directory (fixed name)
+    // The payload directory always uses the name "payload".
+    // Output filename prefix is handled by zks-rs via --prefix flag or interactive prompt.
+    let payload_name = "payload".to_string();
 
     let payload_dir = build_dir.join(&payload_name);
-    fs::create_dir(&payload_dir).map_err(|e| ZksError::StagingError(format!("Failed to create payload directory: {}", e)))?;
-    
+    fs::create_dir(&payload_dir).map_err(|e| {
+        ZksError::StagingError(format!("Failed to create payload directory: {}", e))
+    })?;
+
     // 3. Create 'to_restore' directory INSIDE payload
     let restore_root = payload_dir.join("to_restore");
-    fs::create_dir(&restore_root).map_err(|e| ZksError::StagingError(format!("Failed to create to_restore directory: {}", e)))?;
-    
+    fs::create_dir(&restore_root).map_err(|e| {
+        ZksError::StagingError(format!("Failed to create to_restore directory: {}", e))
+    })?;
+
     // 4. Generate Files list and create stubs
     let mut file_entries = Vec::new();
-    
+
     for (i, target) in targets.iter().enumerate() {
         let id = (i + 1) as u32;
         let entry = FileEntry::from_path(id, target, dereference)?;
-        
+
         let container_dir = restore_root.join(id.to_string());
         fs::create_dir(&container_dir)?;
-        
+
         // Create stub
         let stub_path = container_dir.join(entry.name.as_ref().unwrap());
-        
+
         match entry.entry_type {
             crate::manifest::EntryType::Directory => {
                 fs::create_dir(&stub_path)?;
-            },
+            }
             crate::manifest::EntryType::File => {
                 fs::File::create(&stub_path)?;
-            },
+            }
             crate::manifest::EntryType::Symlink => {
                 let link_target = fs::read_link(target).map_err(|e| ZksError::IoError(e))?;
                 std::os::unix::fs::symlink(&link_target, &stub_path)?;
             }
         }
-        
+
         file_entries.push(entry);
     }
-    
+
     // 5. Generate Manifest
-    let mode = if utils::is_root()? { PrivilegeMode::Root } else { PrivilegeMode::User };
+    let mode = if utils::is_root()? {
+        PrivilegeMode::Root
+    } else {
+        PrivilegeMode::User
+    };
     let hostname = get_hostname()?;
-    
+
     let metadata = Metadata::new(hostname, mode);
     let manifest = Manifest::new(metadata, file_entries);
-    
+
     // 6. Write list.yaml INSIDE payload
     let manifest_path = payload_dir.join("list.yaml");
     let f = fs::File::create(&manifest_path)?;
     serde_yaml::to_writer(f, &manifest)?;
-    
+
     Ok((build_dir, payload_name, lock_file))
 }
 
@@ -99,7 +115,7 @@ pub fn prepare_staging(targets: &[PathBuf], dereference: bool) -> Result<(PathBu
 /// If successful, it means the process is dead, so we delete the directory.
 pub fn try_gc_staging() -> Result<(), ZksError> {
     let staging_root = utils::get_stazis_temp_dir_path()?;
-    
+
     if !staging_root.exists() {
         return Ok(());
     }
@@ -114,17 +130,17 @@ pub fn try_gc_staging() -> Result<(), ZksError> {
                     let lock_path = path.join(".lock");
                     if lock_path.exists() {
                         if let Ok(lock_file) = fs::File::open(&lock_path) {
-                            // Try LOCK_NB (Non-Blocking). 
+                            // Try LOCK_NB (Non-Blocking).
                             // If lock_exclusive succeeds, it means no one else holds it.
                             if lock_file.try_lock_exclusive().is_ok() {
                                 // Safe to delete
                                 // We hold the lock now, so no one else can claim it.
                                 // We can delete the directory.
-                                // Note: remove_dir_all might fail on .lock file on Windows because we hold open handle, 
-                                // but on Linux unlink usually works on open files. 
-                                // To be safe, we can drop lock_file before delete? 
+                                // Note: remove_dir_all might fail on .lock file on Windows because we hold open handle,
+                                // but on Linux unlink usually works on open files.
+                                // To be safe, we can drop lock_file before delete?
                                 // NO, if we drop, someone else might claim it (race).
-                                // But since we are deleting, new processes create NEW directories with new names, 
+                                // But since we are deleting, new processes create NEW directories with new names,
                                 // they don't reuse old build_ dirs. So race is only with other GCs.
                                 // If we hold lock, other GCs fail try_lock.
                                 // So we are safe.
@@ -137,7 +153,7 @@ pub fn try_gc_staging() -> Result<(), ZksError> {
                         }
                     } else {
                         // No .lock file? Maybe created before locking logic or broken.
-                        // Can we safely delete? 
+                        // Can we safely delete?
                         // Let's rely on checking age or just skip for now to be safe.
                     }
                 }
@@ -147,14 +163,15 @@ pub fn try_gc_staging() -> Result<(), ZksError> {
     Ok(())
 }
 
-
-
 fn get_hostname() -> Result<String, ZksError> {
     std::process::Command::new("uname")
         .arg("-n")
         .output()
         .map_err(|e| ZksError::OperationFailed(format!("Failed to run uname: {}", e)))
-        .and_then(|o| String::from_utf8(o.stdout).map_err(|e| ZksError::OperationFailed(format!("Invalid utf8 from uname: {}", e))))
+        .and_then(|o| {
+            String::from_utf8(o.stdout)
+                .map_err(|e| ZksError::OperationFailed(format!("Invalid utf8 from uname: {}", e)))
+        })
         .map(|s| s.trim().to_string())
 }
 
@@ -182,7 +199,7 @@ pub struct UnfreezeOptions {
 
 pub struct CheckOptions {
     pub use_cmp: bool,
-    pub force_delete: bool,
+    pub delete: bool,
 }
 
 pub fn check<E: CommandExecutor>(
@@ -191,42 +208,57 @@ pub fn check<E: CommandExecutor>(
     executor: &E,
 ) -> Result<(), ZksError> {
     // 1. Mount Archive
-    let mount_dir = tempfile::tempdir().map_err(|e| ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e)))?;
+    let mount_dir = tempfile::tempdir().map_err(|e| {
+        ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e))
+    })?;
     let mount_point = mount_dir.path();
-    
-    let status = executor.run_interactive("squash_manager-rs", &[
-        "mount",
-        archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?,
-        mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
-    ]).map_err(|e| ZksError::OperationFailed(format!("Failed to execute mount command: {}", e)))?;
-    
+
+    let status = executor
+        .run_interactive(
+            "squash_manager-rs",
+            &[
+                "mount",
+                archive_path
+                    .to_str()
+                    .ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?,
+                mount_point
+                    .to_str()
+                    .ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?,
+            ],
+        )
+        .map_err(|e| {
+            ZksError::OperationFailed(format!("Failed to execute mount command: {}", e))
+        })?;
+
     if !status.success() {
         return Err(ZksError::OperationFailed("Failed to mount archive".into()));
     }
-    
+
     // Ensure unmount
     struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
-             if let Some(s) = self.1.to_str() {
-                 let _ = self.0.run("squash_manager-rs", &["umount", s]);
-             }
+            if let Some(s) = self.1.to_str() {
+                let _ = self.0.run("squash_manager-rs", &["umount", s]);
+            }
         }
     }
     let _guard = UnmountGuard(executor, mount_point);
-    
+
     // 2. Read Manifest
     let manifest_path = mount_point.join("list.yaml");
     if !manifest_path.exists() {
-        return Err(ZksError::OperationFailed("Archive missing list.yaml - invalid format".into()));
+        return Err(ZksError::OperationFailed(
+            "Archive missing list.yaml - invalid format".into(),
+        ));
     }
     let f = fs::File::open(&manifest_path).map_err(ZksError::IoError)?;
     let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZksError::ManifestError)?;
     manifest.validate()?;
-    
+
     // 3. Perform Check
     println!("Checking {} files from archive...", manifest.files.len());
-    
+
     let mut stats_files_matched = 0;
     let mut stats_dirs_matched = 0;
     let mut stats_mismatch = 0;
@@ -240,35 +272,52 @@ pub fn check<E: CommandExecutor>(
     for entry in &manifest.files {
         // ... (Path resolution logic is same)
         let live_root = if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
-             PathBuf::from(parent).join(name)
+            PathBuf::from(parent).join(name)
         } else if let Some(orig) = &entry.original_path {
-             PathBuf::from(orig)
+            PathBuf::from(orig)
         } else {
-             println!("SKIPPED (Invalid Entry {}): Missing path info", entry.id);
-             continue;
+            println!("SKIPPED (Invalid Entry {}): Missing path info", entry.id);
+            continue;
         };
 
         // Construct source path in mount
-        let entry_name_in_mount = entry.name.as_deref()
+        let entry_name_in_mount = entry
+            .name
+            .as_deref()
             .or(live_root.file_name().and_then(|n| n.to_str()))
             .unwrap_or("unknown");
-            
+
         let mount_root = mount_point
             .join("to_restore")
             .join(entry.id.to_string())
             .join(entry_name_in_mount);
 
         if fs::symlink_metadata(&mount_root).is_err() {
-             println!("ERROR: Archive corrupted, missing internal root for id {}", entry.id);
-             continue;
+            println!(
+                "ERROR: Archive corrupted, missing internal root for id {}",
+                entry.id
+            );
+            continue;
         }
 
-        if entry.entry_type == crate::manifest::EntryType::File || entry.entry_type == crate::manifest::EntryType::Symlink {
+        if entry.entry_type == crate::manifest::EntryType::File
+            || entry.entry_type == crate::manifest::EntryType::Symlink
+        {
             // Check single item
-            check_item(&live_root, &mount_root, options, 
-                       &mut stats_files_matched, &mut stats_dirs_matched, &mut stats_links_matched,
-                       &mut stats_files_deleted, &mut stats_dirs_deleted, &mut stats_links_deleted,
-                       &mut stats_mismatch, &mut stats_missing, &mut stats_skipped)?;
+            check_item(
+                &live_root,
+                &mount_root,
+                options,
+                &mut stats_files_matched,
+                &mut stats_dirs_matched,
+                &mut stats_links_matched,
+                &mut stats_files_deleted,
+                &mut stats_dirs_deleted,
+                &mut stats_links_deleted,
+                &mut stats_mismatch,
+                &mut stats_missing,
+                &mut stats_skipped,
+            )?;
         } else {
             // Directory: Use Walker
             let walker = walkdir::WalkDir::new(&mount_root).contents_first(true);
@@ -286,22 +335,40 @@ pub fn check<E: CommandExecutor>(
                     Err(_) => continue,
                 };
                 let live_path = live_root.join(rel_path);
-                
-                check_item(&live_path, mount_path, options,
-                           &mut stats_files_matched, &mut stats_dirs_matched, &mut stats_links_matched,
-                           &mut stats_files_deleted, &mut stats_dirs_deleted, &mut stats_links_deleted,
-                           &mut stats_mismatch, &mut stats_missing, &mut stats_skipped)?;
+
+                check_item(
+                    &live_path,
+                    mount_path,
+                    options,
+                    &mut stats_files_matched,
+                    &mut stats_dirs_matched,
+                    &mut stats_links_matched,
+                    &mut stats_files_deleted,
+                    &mut stats_dirs_deleted,
+                    &mut stats_links_deleted,
+                    &mut stats_mismatch,
+                    &mut stats_missing,
+                    &mut stats_skipped,
+                )?;
             }
         }
     }
-    
+
     println!("---------------------------------------------------");
     println!("Indexed Paths: {}", manifest.files.len());
-    println!("Files Matched: {}, Dirs Matched: {}, Links Matched: {}", stats_files_matched, stats_dirs_matched, stats_links_matched);
-    println!("Files Deleted: {}, Dirs Deleted: {}, Links Deleted: {}", stats_files_deleted, stats_dirs_deleted, stats_links_deleted);
-    println!("Mismatched: {}, Missing: {}, Skipped (Newer): {}", 
-             stats_mismatch, stats_missing, stats_skipped);
-    
+    println!(
+        "Files Matched: {}, Dirs Matched: {}, Links Matched: {}",
+        stats_files_matched, stats_dirs_matched, stats_links_matched
+    );
+    println!(
+        "Files Deleted: {}, Dirs Deleted: {}, Links Deleted: {}",
+        stats_files_deleted, stats_dirs_deleted, stats_links_deleted
+    );
+    println!(
+        "Mismatched: {}, Missing: {}, Skipped (Newer): {}",
+        stats_mismatch, stats_missing, stats_skipped
+    );
+
     Ok(())
 }
 
@@ -337,27 +404,29 @@ fn check_item(
     };
 
     // Check Type
-    if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir() ||
-       live_meta.file_type().is_file() != mount_meta.file_type().is_file() ||
-       live_meta.file_type().is_symlink() != mount_meta.file_type().is_symlink() { 
+    if live_meta.file_type().is_dir() != mount_meta.file_type().is_dir()
+        || live_meta.file_type().is_file() != mount_meta.file_type().is_file()
+        || live_meta.file_type().is_symlink() != mount_meta.file_type().is_symlink()
+    {
         println!("MISMATCH (Type): {}", display_name);
         *stats_mismatch += 1;
         return Ok(());
     }
 
     if live_meta.is_dir() {
-        if options.force_delete {
-             if let Err(e) = fs::remove_dir(live_path) {
-                 if e.kind() == std::io::ErrorKind::DirectoryNotEmpty || e.raw_os_error() == Some(39) {
-                     println!("MATCH (Dir): {}", display_name); 
-                     *stats_dirs_matched += 1;
-                 } else {
-                     println!("ERROR: Failed to delete dir {}: {}", display_name, e);
-                 }
-             } else {
-                 println!("DELETED (Dir): {}", display_name);
-                 *stats_dirs_deleted += 1;
-             }
+        if options.delete {
+            if let Err(e) = fs::remove_dir(live_path) {
+                if e.kind() == std::io::ErrorKind::DirectoryNotEmpty || e.raw_os_error() == Some(39)
+                {
+                    println!("MATCH (Dir): {}", display_name);
+                    *stats_dirs_matched += 1;
+                } else {
+                    println!("ERROR: Failed to delete dir {}: {}", display_name, e);
+                }
+            } else {
+                println!("DELETED (Dir): {}", display_name);
+                *stats_dirs_deleted += 1;
+            }
         } else {
             println!("MATCH (Dir): {}", display_name);
             *stats_dirs_matched += 1;
@@ -368,66 +437,84 @@ fn check_item(
     if live_meta.is_symlink() {
         let live_target = fs::read_link(live_path);
         let mount_target = fs::read_link(mount_path);
-        
-        if live_target.is_err() || mount_target.is_err() || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap() {
-             println!("MISMATCH (Link Target): {} ({:?} vs {:?})", 
-                 display_name, live_target, mount_target);
-             *stats_mismatch += 1;
-             return Ok(());
+
+        if live_target.is_err()
+            || mount_target.is_err()
+            || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap()
+        {
+            println!(
+                "MISMATCH (Link Target): {} ({:?} vs {:?})",
+                display_name, live_target, mount_target
+            );
+            *stats_mismatch += 1;
+            return Ok(());
         }
     } else {
         if live_meta.len() != mount_meta.len() {
-             println!("MISMATCH (Size): {} (Live: {}, Archive: {})", display_name, live_meta.len(), mount_meta.len());
-             *stats_mismatch += 1;
-             return Ok(());
+            println!(
+                "MISMATCH (Size): {} (Live: {}, Archive: {})",
+                display_name,
+                live_meta.len(),
+                mount_meta.len()
+            );
+            *stats_mismatch += 1;
+            return Ok(());
         }
 
         if options.use_cmp {
             let matches = compare_files(live_path, mount_path).unwrap_or(false);
             if !matches {
-                 println!("MISMATCH (Content): {}", display_name);
-                 *stats_mismatch += 1;
-                 return Ok(());
+                println!("MISMATCH (Content): {}", display_name);
+                *stats_mismatch += 1;
+                return Ok(());
             }
         }
     }
 
     // Match found
-    if options.force_delete {
-         let live_mtime = live_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-         let archive_mtime = mount_meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-             .duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-         
-          // Safety Gate: Do not delete if Live file is NEWER than Archive
-          // Exception: If use_cmp is enabled, we verified content is identical. 
-          // So even if mtime is newer (e.g. touched), data is safe to delete (it is backed up).
-          if !options.use_cmp {
-              if live_mtime > archive_mtime {
-                   println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
-                   *stats_skipped += 1;
-                   return Ok(());
-              }
-          }
-         
-         if let Err(e) = fs::remove_file(live_path) {
-              println!("ERROR: Failed to delete {}: {}", display_name, e);
-          } else {
-               println!("DELETED: {}", display_name);
-               if live_meta.is_symlink() {
-                   *stats_links_deleted += 1;
-               } else {
-                   *stats_files_deleted += 1;
-               }
-          }
-     } else {
-          println!("MATCH: {}", display_name);
-          if live_meta.is_symlink() {
-              *stats_links_matched += 1;
-          } else {
-              *stats_files_matched += 1;
-          }
-     }
+    if options.delete {
+        let live_mtime = live_meta
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let archive_mtime = mount_meta
+            .modified()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Safety Gate: Do not delete if Live file is NEWER than Archive
+        // Exception: If use_cmp is enabled, we verified content is identical.
+        // So even if mtime is newer (e.g. touched), data is safe to delete (it is backed up).
+        if !options.use_cmp {
+            if live_mtime > archive_mtime {
+                println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
+                *stats_skipped += 1;
+                return Ok(());
+            }
+        }
+
+        if let Err(e) = fs::remove_file(live_path) {
+            println!("ERROR: Failed to delete {}: {}", display_name, e);
+        } else {
+            println!("DELETED: {}", display_name);
+            if live_meta.is_symlink() {
+                *stats_links_deleted += 1;
+            } else {
+                *stats_files_deleted += 1;
+            }
+        }
+    } else {
+        println!("MATCH: {}", display_name);
+        if live_meta.is_symlink() {
+            *stats_links_matched += 1;
+        } else {
+            *stats_files_matched += 1;
+        }
+    }
 
     Ok(())
 }
@@ -436,21 +523,25 @@ fn compare_files(p1: &Path, p2: &Path) -> Result<bool, ZksError> {
     use std::io::Read;
     let f1 = fs::File::open(p1).map_err(ZksError::IoError)?;
     let f2 = fs::File::open(p2).map_err(ZksError::IoError)?;
-    
+
     // Use BufReader logic
     let mut b1 = std::io::BufReader::new(f1);
     let mut b2 = std::io::BufReader::new(f2);
-    
+
     let mut buf1 = [0; 8192];
     let mut buf2 = [0; 8192];
-    
+
     loop {
         let n1 = b1.read(&mut buf1)?;
         let n2 = b2.read(&mut buf2)?;
-        
-        if n1 != n2 { return Ok(false); }
-        if n1 == 0 { return Ok(true); } // EOF reached for both
-        
+
+        if n1 != n2 {
+            return Ok(false);
+        }
+        if n1 == 0 {
+            return Ok(true);
+        } // EOF reached for both
+
         if buf1[..n1] != buf2[..n2] {
             return Ok(false);
         }
@@ -463,15 +554,28 @@ pub fn unfreeze<E: CommandExecutor>(
     executor: &E,
 ) -> Result<(), ZksError> {
     // 1. Create temporary mount point
-    let mount_dir = tempfile::tempdir().map_err(|e| ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e)))?;
+    let mount_dir = tempfile::tempdir().map_err(|e| {
+        ZksError::OperationFailed(format!("Failed to create temporary mount directory: {}", e))
+    })?;
     let mount_point = mount_dir.path();
 
     // 2. Mount Archive
-    let status = executor.run_interactive("squash_manager-rs", &[
-        "mount", 
-        archive_path.to_str().ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?, 
-        mount_point.to_str().ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?
-    ]).map_err(|e| ZksError::OperationFailed(format!("Failed to execute mount command: {}", e)))?;
+    let status = executor
+        .run_interactive(
+            "squash_manager-rs",
+            &[
+                "mount",
+                archive_path
+                    .to_str()
+                    .ok_or(ZksError::InvalidPath(archive_path.to_path_buf()))?,
+                mount_point
+                    .to_str()
+                    .ok_or(ZksError::InvalidPath(mount_point.to_path_buf()))?,
+            ],
+        )
+        .map_err(|e| {
+            ZksError::OperationFailed(format!("Failed to execute mount command: {}", e))
+        })?;
 
     if !status.success() {
         return Err(ZksError::OperationFailed("Failed to mount archive".into()));
@@ -481,9 +585,9 @@ pub fn unfreeze<E: CommandExecutor>(
     struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
-             if let Some(s) = self.1.to_str() {
-                 let _ = self.0.run("squash_manager-rs", &["umount", s]);
-             }
+            if let Some(s) = self.1.to_str() {
+                let _ = self.0.run("squash_manager-rs", &["umount", s]);
+            }
         }
     }
     let _guard = UnmountGuard(executor, mount_point);
@@ -525,41 +629,49 @@ fn validate_no_symlinks_in_ancestors(path: &Path) -> Result<(), ZksError> {
 fn restore_from_mount<E: CommandExecutor>(
     mount_point: &Path,
     options: &UnfreezeOptions,
-    executor: &E
+    executor: &E,
 ) -> Result<(), ZksError> {
     // 3. Read Manifest
     let manifest_path = mount_point.join("list.yaml");
     if !manifest_path.exists() {
-        return Err(ZksError::OperationFailed("Archive missing list.yaml - invalid format".into()));
+        return Err(ZksError::OperationFailed(
+            "Archive missing list.yaml - invalid format".into(),
+        ));
     }
-    
+
     let f = fs::File::open(&manifest_path)?;
     let manifest: Manifest = serde_yaml::from_reader(f)?;
-    
+
     // 4. Validate manifest (paths)
     manifest.validate()?;
-    
+
     println!("Restoring {} files from archive...", manifest.files.len());
-    
+
     // 5. Restore Loop
     for entry in &manifest.files {
         // Determine destination path (handle Legacy vs New format)
-        let (dest_path, restore_parent) = if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
-             let p = PathBuf::from(parent);
-             (p.join(name), p)
-        } else if let Some(orig) = &entry.original_path {
-             let p = PathBuf::from(orig);
-             let parent = p.parent().unwrap_or(Path::new("/")).to_path_buf();
-             (p, parent)
-        } else {
-             return Err(ZksError::OperationFailed(format!("Invalid entry {}: missing path info", entry.id)));
-        };
-        
+        let (dest_path, restore_parent) =
+            if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
+                let p = PathBuf::from(parent);
+                (p.join(name), p)
+            } else if let Some(orig) = &entry.original_path {
+                let p = PathBuf::from(orig);
+                let parent = p.parent().unwrap_or(Path::new("/")).to_path_buf();
+                (p, parent)
+            } else {
+                return Err(ZksError::OperationFailed(format!(
+                    "Invalid entry {}: missing path info",
+                    entry.id
+                )));
+            };
+
         // Derive name if missing (Legacy)
-        let entry_name = entry.name.as_deref()
+        let entry_name = entry
+            .name
+            .as_deref()
             .or(dest_path.file_name().and_then(|n| n.to_str()))
             .unwrap_or("unknown");
-            
+
         // Construct source path in mount
         // Structure: mount_point/to_restore/<id>/<name>
         let src_path = mount_point
@@ -578,44 +690,75 @@ fn restore_from_mount<E: CommandExecutor>(
         let mut extra_rsync_flags = Vec::new();
 
         if dest_path.exists() {
-             if options.skip_existing {
-                 if dest_path.is_dir() {
-                     println!("Merging into existing directory (skipping conflicts): {:?}", dest_path);
-                     extra_rsync_flags.push("--ignore-existing");
-                 } else {
-                     println!("Skipping existing file: {:?}", dest_path);
-                     continue;
-                 }
-             } else if !options.overwrite {
-                 return Err(ZksError::OperationFailed(format!("File exists: {:?}. Use --overwrite to replace/merge.", dest_path)));
-             }
-        }
-        
-        // Ensure parent directory exists
-        if !restore_parent.exists() {
-             if let Err(_) = fs::create_dir_all(&restore_parent) {
-                  // Fallback to sudo mkdir -p
-                  if let Some(runner) = utils::check_root_or_get_runner("Parent directory creation requires root")? {
-                       let status = executor.run_interactive(&runner, &["mkdir", "-p", restore_parent.to_str().ok_or(ZksError::InvalidPath(restore_parent.clone()))?])?;
-                       if !status.success() {
-                           return Err(ZksError::OperationFailed(format!("Failed to create directory {:?}", restore_parent)));
-                       }
-                  } else {
-                       return Err(ZksError::OperationFailed(format!("Failed to create directory {:?}", restore_parent)));
-                  }
-             }
+            if options.skip_existing {
+                if dest_path.is_dir() {
+                    println!(
+                        "Merging into existing directory (skipping conflicts): {:?}",
+                        dest_path
+                    );
+                    extra_rsync_flags.push("--ignore-existing");
+                } else {
+                    println!("Skipping existing file: {:?}", dest_path);
+                    continue;
+                }
+            } else if !options.overwrite {
+                return Err(ZksError::OperationFailed(format!(
+                    "File exists: {:?}. Use --overwrite to replace/merge.",
+                    dest_path
+                )));
+            }
         }
 
-        let src_str = src_path.to_str().ok_or(ZksError::InvalidPath(src_path.clone()))?;
-        let dest_str = dest_path.to_str().ok_or(ZksError::InvalidPath(dest_path.clone()))?;
-        
-        println!("Restoring {} -> {}", src_path.display(), dest_path.display());
+        // Ensure parent directory exists
+        if !restore_parent.exists() {
+            if let Err(_) = fs::create_dir_all(&restore_parent) {
+                // Fallback to sudo mkdir -p
+                if let Some(runner) =
+                    utils::check_root_or_get_runner("Parent directory creation requires root")?
+                {
+                    let status = executor.run_interactive(
+                        &runner,
+                        &[
+                            "mkdir",
+                            "-p",
+                            restore_parent
+                                .to_str()
+                                .ok_or(ZksError::InvalidPath(restore_parent.clone()))?,
+                        ],
+                    )?;
+                    if !status.success() {
+                        return Err(ZksError::OperationFailed(format!(
+                            "Failed to create directory {:?}",
+                            restore_parent
+                        )));
+                    }
+                } else {
+                    return Err(ZksError::OperationFailed(format!(
+                        "Failed to create directory {:?}",
+                        restore_parent
+                    )));
+                }
+            }
+        }
+
+        let src_str = src_path
+            .to_str()
+            .ok_or(ZksError::InvalidPath(src_path.clone()))?;
+        let dest_str = dest_path
+            .to_str()
+            .ok_or(ZksError::InvalidPath(dest_path.clone()))?;
+
+        println!(
+            "Restoring {} -> {}",
+            src_path.display(),
+            dest_path.display()
+        );
 
         let mut final_src = src_str.to_string();
         if entry.entry_type == crate::manifest::EntryType::Directory {
             final_src.push('/');
         }
-        
+
         // Use user rsync by default
         let mut args = vec!["-a", "--info=progress2", &final_src, dest_str];
         // Insert flags before source/dest
@@ -624,30 +767,41 @@ fn restore_from_mount<E: CommandExecutor>(
         }
 
         let rsync_status = executor.run_interactive("rsync", &args);
-        
+
         let need_sudo = if let Ok(s) = rsync_status {
-             !s.success()
+            !s.success()
         } else {
-             true
+            true
         };
-        
-        if need_sudo || (manifest.metadata.privilege_mode == Some(PrivilegeMode::Root) && !utils::is_root().unwrap_or(false)) {
-             if let Some(runner) = utils::check_root_or_get_runner("Restoration requires elevated privileges")? {
-                  println!("Retrying with {}", runner);
-                  
-                  let mut sudo_args = vec!["rsync", "-a", "--info=progress2", &final_src, dest_str];
-                  for flag in &extra_rsync_flags {
-                      sudo_args.insert(2, flag);
-                  }
-                  
-                  let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
-                  if !status.success() {
-                      return Err(ZksError::OperationFailed(format!("Failed to restore {:?}: rsync failed even with sudo", dest_path)));
-                  }
-             } else {
-                  // Already tried as root or no runner, and failed
-                   return Err(ZksError::OperationFailed(format!("Failed to restore {:?}", dest_path)));
-             }
+
+        if need_sudo
+            || (manifest.metadata.privilege_mode == Some(PrivilegeMode::Root)
+                && !utils::is_root().unwrap_or(false))
+        {
+            if let Some(runner) =
+                utils::check_root_or_get_runner("Restoration requires elevated privileges")?
+            {
+                println!("Retrying with {}", runner);
+
+                let mut sudo_args = vec!["rsync", "-a", "--info=progress2", &final_src, dest_str];
+                for flag in &extra_rsync_flags {
+                    sudo_args.insert(2, flag);
+                }
+
+                let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
+                if !status.success() {
+                    return Err(ZksError::OperationFailed(format!(
+                        "Failed to restore {:?}: rsync failed even with sudo",
+                        dest_path
+                    )));
+                }
+            } else {
+                // Already tried as root or no runner, and failed
+                return Err(ZksError::OperationFailed(format!(
+                    "Failed to restore {:?}",
+                    dest_path
+                )));
+            }
         }
     }
 
@@ -664,24 +818,24 @@ pub fn freeze<E: CommandExecutor>(
 
     // 0. Auto-GC: Cleanup stale build directories (protected by flock)
     if let Err(e) = try_gc_staging() {
-        warn!("GC Error: {}", e); 
+        warn!("GC Error: {}", e);
     }
 
     // 1. Prepare Staging
     // _lock must be kept in scope to maintain the flock until we are done (or until cleanup)
     let (build_dir, payload_name, _lock) = prepare_staging(targets, options.dereference)?;
-    
+
     // 2. Read Manifest
     let payload_dir = build_dir.join(&payload_name);
     let manifest_path = payload_dir.join("list.yaml");
     let f = fs::File::open(&manifest_path).map_err(ZksError::IoError)?;
     let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZksError::ManifestError)?;
-    
+
     // 3. Generate internal script
     let script = generate_freeze_script(&manifest, &build_dir, &payload_name, options)?;
     let script_path = build_dir.join("freeze.sh");
     fs::write(&script_path, &script)?;
-    
+
     // 4. Run unshare
     // ADAPTIVE STRATEGY:
     // - Encrypted (-e): We MUST be real root. We use only Mount Namespace (-m). (User NS breaks LUKS)
@@ -694,38 +848,52 @@ pub fn freeze<E: CommandExecutor>(
     if options.encrypt {
         // Enforce Root
         if !utils::is_root().unwrap_or(false) {
-             return Err(ZksError::OperationFailed("Encrypted freeze (-e) must be run as root (for LUKS). Please run with sudo.".to_string()));
+            return Err(ZksError::OperationFailed(
+                "Encrypted freeze (-e) must be run as root (for LUKS). Please run with sudo."
+                    .to_string(),
+            ));
         }
         // Root + Encrypt -> Mount NS only
         unshare_args.extend_from_slice(&["-m", "--propagation", "private"]);
     } else {
         // Plain mode
         if utils::is_root().unwrap_or(false) {
-             // Root + Plain -> Mount NS only (simpler, cleaner)
-             unshare_args.extend_from_slice(&["-m", "--propagation", "private"]);
+            // Root + Plain -> Mount NS only (simpler, cleaner)
+            unshare_args.extend_from_slice(&["-m", "--propagation", "private"]);
         } else {
-             // User + Plain -> User + Mount NS (Rootless)
-             unshare_args.extend_from_slice(&["-m", "-U", "-r", "--propagation", "private"]);
+            // User + Plain -> User + Mount NS (Rootless)
+            unshare_args.extend_from_slice(&["-m", "-U", "-r", "--propagation", "private"]);
         }
     }
 
     // Append command
     unshare_args.push("sh");
-    unshare_args.push(script_path.to_str().ok_or(ZksError::InvalidPath(script_path.clone()))?);
-    
+    unshare_args.push(
+        script_path
+            .to_str()
+            .ok_or(ZksError::InvalidPath(script_path.clone()))?,
+    );
+
     // Use run_and_capture_error to get stderr for friendly messages
-    let (status, stderr) = executor.run_and_capture_error("unshare", &unshare_args)
+    let (status, stderr) = executor
+        .run_and_capture_error("unshare", &unshare_args)
         .map_err(|e| ZksError::OperationFailed(format!("Failed to execute unshare: {}", e)))?;
-    
+
     if !status.success() {
-         return Err(ZksError::OperationFailed(format!("Freeze process failed: {}", stderr)));
+        return Err(ZksError::OperationFailed(format!(
+            "Freeze process failed: {}",
+            stderr
+        )));
     }
-    
+
     // Cleanup Staging Area
     if let Err(e) = std::fs::remove_dir_all(&build_dir) {
-        warn!("Failed to clean up staging directory {:?}: {}", build_dir, e);
+        warn!(
+            "Failed to clean up staging directory {:?}: {}",
+            build_dir, e
+        );
     }
-    
+
     Ok(())
 }
 
@@ -752,12 +920,16 @@ fn generate_freeze_script(
             continue; // Already staged as symlink, no bind mount needed
         }
         if let (Some(parent), Some(name)) = (&entry.restore_path, &entry.name) {
-             let src = Path::new(parent).join(name);
-             let dest = build_dir.join(payload_name).join("to_restore").join(entry.id.to_string()).join(name);
+            let src = Path::new(parent).join(name);
+            let dest = build_dir
+                .join(payload_name)
+                .join("to_restore")
+                .join(entry.id.to_string())
+                .join(name);
 
-             let src_quoted = shell_quote(&src.display().to_string());
-             let dest_quoted = shell_quote(&dest.display().to_string());
-             script.push_str(&format!("mount --bind {} {}\n", src_quoted, dest_quoted));
+            let src_quoted = shell_quote(&src.display().to_string());
+            let dest_quoted = shell_quote(&dest.display().to_string());
+            script.push_str(&format!("mount --bind {} {}\n", src_quoted, dest_quoted));
         }
     }
 
@@ -788,11 +960,7 @@ fn generate_freeze_script(
 
     script.push_str(&format!(
         "squash_manager-rs create {} {} {} {} {}\n",
-        encrypt_flag,
-        flags,
-        progress_flag,
-        input_quoted,
-        output_quoted
+        encrypt_flag, flags, progress_flag, input_quoted, output_quoted
     ));
 
     Ok(script)
@@ -807,39 +975,60 @@ mod tests {
     fn test_prepare_staging() {
         // Mock XDG_CACHE_HOME by setting environment variable
         let temp_cache = tempdir().unwrap();
-        
+
         // Since we are adding ONLY this test to this file, it's fine.
-        unsafe { std::env::set_var("XDG_CACHE_HOME", temp_cache.path()); }
-        
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp_cache.path());
+        }
+
         let target_dir = tempdir().unwrap();
         let file_target = target_dir.path().join("data.txt");
         let dir_target = target_dir.path().join("config");
         fs::write(&file_target, "content").unwrap();
         fs::create_dir(&dir_target).unwrap();
-        
+
         let targets = vec![file_target.clone(), dir_target.clone()];
-        
+
         // Return tuple now includes payload_name
         let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
-        
-        assert_eq!(payload_name, "data.txt"); // Name of first target
-        
+
+        assert_eq!(payload_name, "payload"); // Always "payload"
+
         assert!(build_dir.exists());
         let payload_dir = build_dir.join(&payload_name);
         assert!(payload_dir.exists());
         assert!(payload_dir.join("list.yaml").exists());
         assert!(payload_dir.join("to_restore").exists());
-        
+
         // Check stubs
         // ID 1: data.txt (file)
         assert!(payload_dir.join("to_restore/1/data.txt").exists());
-        assert!(payload_dir.join("to_restore/1/data.txt").metadata().unwrap().is_file());
-        assert_eq!(payload_dir.join("to_restore/1/data.txt").metadata().unwrap().len(), 0); // Stub is empty
-        
+        assert!(
+            payload_dir
+                .join("to_restore/1/data.txt")
+                .metadata()
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(
+            payload_dir
+                .join("to_restore/1/data.txt")
+                .metadata()
+                .unwrap()
+                .len(),
+            0
+        ); // Stub is empty
+
         // ID 2: config (dir)
         assert!(payload_dir.join("to_restore/2/config").exists());
-        assert!(payload_dir.join("to_restore/2/config").metadata().unwrap().is_dir());
-        
+        assert!(
+            payload_dir
+                .join("to_restore/2/config")
+                .metadata()
+                .unwrap()
+                .is_dir()
+        );
+
         // Check manifest content validation
         let manifest_content = fs::read_to_string(payload_dir.join("list.yaml")).unwrap();
         assert!(manifest_content.contains("data.txt"));
@@ -849,30 +1038,32 @@ mod tests {
     #[test]
     fn test_prepare_staging_symlinks() {
         use std::os::unix::fs::symlink;
-         // Mock XDG_CACHE_HOME by setting environment variable
+        // Mock XDG_CACHE_HOME by setting environment variable
         let temp_cache = tempdir().unwrap();
-        unsafe { std::env::set_var("XDG_CACHE_HOME", temp_cache.path()); }
-        
+        unsafe {
+            std::env::set_var("XDG_CACHE_HOME", temp_cache.path());
+        }
+
         let target_dir = tempdir().unwrap();
         let target_file = target_dir.path().join("real_file");
         fs::write(&target_file, "real content").unwrap();
-        
+
         let symlink_path = target_dir.path().join("my_link");
         symlink(&target_file, &symlink_path).unwrap();
-        
+
         // Test 1: No Dereference (default) -> Should preserve symlink
         let targets = vec![symlink_path.clone()];
         let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
-        
+
         let payload_dir = build_dir.join(&payload_name);
         let link_in_staging = payload_dir.join("to_restore/1/my_link");
-        
+
         assert!(link_in_staging.exists() || link_in_staging.is_symlink()); // is_symlink is sufficient check
         assert!(fs::symlink_metadata(&link_in_staging).unwrap().is_symlink());
-        
+
         let target = fs::read_link(&link_in_staging).unwrap();
         assert_eq!(target, target_file); // Should point to original target absolute path
-        
+
         // Clean up lock to allow GC (not critical for test but good practice)
         drop(_lock);
 
@@ -880,7 +1071,7 @@ mod tests {
         let (build_dir_2, payload_name_2, _lock_2) = prepare_staging(&targets, true).unwrap();
         let payload_dir_2 = build_dir_2.join(&payload_name_2);
         let stub_in_staging = payload_dir_2.join("to_restore/1/my_link");
-        
+
         assert!(stub_in_staging.exists());
         assert!(fs::metadata(&stub_in_staging).unwrap().is_file()); // It's a file stub now
         assert!(!fs::symlink_metadata(&stub_in_staging).unwrap().is_symlink());
@@ -891,20 +1082,18 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let build_dir = temp.path().join("build");
         let output = temp.path().join("out.sqfs");
-        
+
         let manifest = Manifest {
-             metadata: Metadata::new("test-host".into(), PrivilegeMode::User),
-             files: vec![
-                 FileEntry { 
-                     id: 1, 
-                     entry_type: crate::manifest::EntryType::File,
-                     name: Some("file1".into()),
-                     restore_path: Some("/src/dir1".into()),
-                     original_path: None
-                 }
-             ]
+            metadata: Metadata::new("test-host".into(), PrivilegeMode::User),
+            files: vec![FileEntry {
+                id: 1,
+                entry_type: crate::manifest::EntryType::File,
+                name: Some("file1".into()),
+                restore_path: Some("/src/dir1".into()),
+                original_path: None,
+            }],
         };
-        
+
         let options = FreezeOptions {
             encrypt: false,
             output: output.clone(),
@@ -914,18 +1103,17 @@ mod tests {
             compression: None,
             dereference: false,
         };
-        
+
         let payload_name = "test_payload";
         let script = generate_freeze_script(&manifest, &build_dir, payload_name, &options).unwrap();
-        
+
         assert!(script.contains("mount --bind '/src/dir1/file1'"));
         assert!(script.contains("to_restore/1/file1'"));
         assert!(script.contains("squash_manager-rs create"));
         assert!(script.contains("build/test_payload'"));
         assert!(script.contains("--no-progress"));
     }
-    
-    
+
     #[test]
     fn test_shell_quote() {
         // Normal string
@@ -945,16 +1133,14 @@ mod tests {
         let build_dir = temp.path().join("build");
 
         let manifest = Manifest {
-             metadata: Metadata::new("test-host".into(), PrivilegeMode::User),
-             files: vec![
-                 FileEntry {
-                     id: 1,
-                     entry_type: crate::manifest::EntryType::Directory,
-                     name: Some("$(whoami)".into()),
-                     restore_path: Some("/tmp/`id`".into()),
-                     original_path: None
-                 }
-             ]
+            metadata: Metadata::new("test-host".into(), PrivilegeMode::User),
+            files: vec![FileEntry {
+                id: 1,
+                entry_type: crate::manifest::EntryType::Directory,
+                name: Some("$(whoami)".into()),
+                restore_path: Some("/tmp/`id`".into()),
+                original_path: None,
+            }],
         };
 
         let options = FreezeOptions {
@@ -1004,32 +1190,34 @@ mod tests {
 
         // 3. Create manifest
         let manifest = Manifest {
-             metadata: Metadata::new("host".into(), PrivilegeMode::User),
-             files: vec![
-                 FileEntry {
-                     id: 1,
-                     entry_type: crate::manifest::EntryType::File,
-                     name: Some("myfile.txt".into()),
-                     restore_path: Some(dest_path_str.clone()),
-                     original_path: None,
-                 }
-             ]
+            metadata: Metadata::new("host".into(), PrivilegeMode::User),
+            files: vec![FileEntry {
+                id: 1,
+                entry_type: crate::manifest::EntryType::File,
+                name: Some("myfile.txt".into()),
+                restore_path: Some(dest_path_str.clone()),
+                original_path: None,
+            }],
         };
         let f = fs::File::create(mount_path.join("list.yaml")).unwrap();
         serde_yaml::to_writer(f, &manifest).unwrap();
 
         // 4. Mock Executor
         let mut mock = MockCommandExecutor::new();
-        
-        let src_check = restore_subdir.join("myfile.txt").to_str().unwrap().to_string();
+
+        let src_check = restore_subdir
+            .join("myfile.txt")
+            .to_str()
+            .unwrap()
+            .to_string();
         let dest_check = dest.path().join("myfile.txt").to_str().unwrap().to_string();
 
         mock.expect_run_interactive()
             .withf(move |program, args| {
-                 program == "rsync" && 
+                program == "rsync" &&
                  args.contains(&"-a") &&
                  args.contains(&src_check.as_str()) && // Check source
-                 args.contains(&dest_check.as_str())   // Check dest
+                 args.contains(&dest_check.as_str()) // Check dest
             })
             .times(1)
             .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
@@ -1061,31 +1249,33 @@ mod tests {
 
         // 3. Create Legacy Manifest (no name, no restore_path, only original_path)
         let manifest = Manifest {
-             metadata: Metadata::new("host".into(), PrivilegeMode::User),
-             files: vec![
-                 FileEntry {
-                     id: 1,
-                     entry_type: crate::manifest::EntryType::File,
-                     name: None, // Missing in legacy
-                     restore_path: None, // Missing in legacy
-                     original_path: Some(dest_path_str.clone()),
-                 }
-             ]
+            metadata: Metadata::new("host".into(), PrivilegeMode::User),
+            files: vec![FileEntry {
+                id: 1,
+                entry_type: crate::manifest::EntryType::File,
+                name: None,         // Missing in legacy
+                restore_path: None, // Missing in legacy
+                original_path: Some(dest_path_str.clone()),
+            }],
         };
         let f = fs::File::create(mount_path.join("list.yaml")).unwrap();
         serde_yaml::to_writer(f, &manifest).unwrap();
 
         // 4. Mock Executor
         let mut mock = MockCommandExecutor::new();
-        
-        let src_check = restore_subdir.join("legacy.txt").to_str().unwrap().to_string(); // Name derived from filename
+
+        let src_check = restore_subdir
+            .join("legacy.txt")
+            .to_str()
+            .unwrap()
+            .to_string(); // Name derived from filename
         let dest_check = dest_path_str.clone();
 
         mock.expect_run_interactive()
             .withf(move |program, args| {
-                 program == "rsync" && 
-                 args.contains(&src_check.as_str()) && 
-                 args.contains(&dest_check.as_str())
+                program == "rsync"
+                    && args.contains(&src_check.as_str())
+                    && args.contains(&dest_check.as_str())
             })
             .times(1)
             .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));

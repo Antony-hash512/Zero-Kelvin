@@ -1,10 +1,11 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use rand::Rng;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "zks", 
-    about = "Zero Kelvin Stazis - Cold Storage Utility", 
+    name = "zks",
+    about = "Zero Kelvin Stazis - Cold Storage Utility",
     version
 )]
 pub struct ZksArgs {
@@ -15,8 +16,8 @@ pub struct ZksArgs {
 const BANNER: &str = r#"
 Copyleft 🄯 2026 :: GPL3
 github.com/Antony-hash512/Zero-Kelvin-Stazis
- ____  _ Zero Kelvin_     
-/ ___|| |_ __ _ ___(_)___ 
+ ____  _ Zero Kelvin_
+/ ___|| |_ __ _ ___(_)___
 \___ \| __/ _` |_  / / __|
  ___) | || (_| |/ /| \__ \
 |____/ \__\__,_/___|_|___/
@@ -26,7 +27,8 @@ impl ZksArgs {
     pub fn build_command() -> clap::Command {
         use clap::CommandFactory;
         let cmd = Self::command();
-        cmd.after_help(format!("Detailed Command Information:
+        cmd.after_help(format!(
+            "Detailed Command Information:
 {0}
   freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
     Offload data to a SquashFS archive (frozen state).
@@ -37,6 +39,9 @@ impl ZksArgs {
       -e, --encrypt         Encrypt the archive using LUKS (via squash_manager).
       -r, --read <FILE>     Read list of targets from a file.
       -c, --compression N   Zstd compression level (default: {1}).
+          --prefix <NAME>   Prefix for auto-generated filename
+                            (when ARCHIVE_PATH is a directory).
+                            If omitted, you will be prompted interactively.
 
   unfreeze <ARCHIVE_PATH>
     Restore data from a frozen archive to its original locations.
@@ -49,8 +54,10 @@ impl ZksArgs {
       ARCHIVE_PATH          Path to the .sqfs archive to check.
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
-      --force-delete        Delete local files if they match the archive (Destructive!).
-", BANNER, DEFAULT_ZSTD_COMPRESSION))
+      --delete        Delete local files if they match the archive (Destructive!).
+",
+            BANNER, DEFAULT_ZSTD_COMPRESSION
+        ))
     }
 }
 
@@ -72,11 +79,11 @@ pub enum Commands {
         /// Files/directories to freeze followed by the destination ARCHIVE_PATH
         #[arg(value_name = "TARGETS]... [ARCHIVE_PATH", num_args = 1..)]
         args: Vec<PathBuf>,
-        
+
         /// Encrypt the archive using LUKS
         #[arg(short, long)]
         encrypt: bool,
-        
+
         /// Read the list of target paths from a file
         #[arg(short, long, value_name = "FILE")]
         read: Option<PathBuf>,
@@ -109,6 +116,12 @@ pub enum Commands {
         /// Dereference symlinks (store their content instead of the link)
         #[arg(short = 'L', long)]
         dereference: bool,
+
+        /// Prefix for auto-generated filename (when ARCHIVE_PATH is a directory).
+        /// Skips the interactive prompt.
+        // #[arg(short = 'p', long, value_name = "NAME")]
+        #[arg(long, value_name = "NAME")]
+        prefix: Option<String>,
     },
     /// Unfreeze (restore) data from a SquashFS archive
     Unfreeze {
@@ -129,30 +142,30 @@ pub enum Commands {
         /// Path to the SquashFS archive
         #[arg(value_name = "ARCHIVE_PATH")]
         archive_path: PathBuf,
-        
+
         /// Perform byte-by-byte comparison
         #[arg(long)]
         use_cmp: bool,
-        
+
         /// Delete local files if they match the archive content
         #[arg(long)]
-        force_delete: bool,
+        delete: bool,
     },
 }
 
-use zero_kelvin_stazis::error::ZksError;
-use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
+use std::fs;
 use zero_kelvin_stazis::constants::DEFAULT_ZSTD_COMPRESSION;
+use zero_kelvin_stazis::engine::{self, FreezeOptions, UnfreezeOptions};
+use zero_kelvin_stazis::error::ZksError;
 use zero_kelvin_stazis::executor::RealSystem;
 use zero_kelvin_stazis::utils;
-use std::fs;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    
+
     if let Err(e) = run_app() {
         if let Some(friendly) = e.friendly_message() {
-             eprintln!("Suggestion: {}", friendly);
+            eprintln!("Suggestion: {}", friendly);
         }
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -160,14 +173,13 @@ fn main() {
 }
 
 fn run_app() -> Result<(), ZksError> {
-
     let args_raw: Vec<String> = std::env::args().collect();
 
     // 1. No args -> Help + Exit 0
     if args_raw.len() <= 1 {
-         ZksArgs::build_command().print_help().unwrap_or_default();
-         println!();
-         return Ok(());
+        ZksArgs::build_command().print_help().unwrap_or_default();
+        println!();
+        return Ok(());
     }
 
     let matches = match ZksArgs::build_command().try_get_matches() {
@@ -185,15 +197,18 @@ fn run_app() -> Result<(), ZksError> {
                     }
                 }
                 // 3. Command specific errors -> Subcommand Help
-                ErrorKind::MissingRequiredArgument | ErrorKind::MissingSubcommand | ErrorKind::TooFewValues | ErrorKind::ValueValidation => {
+                ErrorKind::MissingRequiredArgument
+                | ErrorKind::MissingSubcommand
+                | ErrorKind::TooFewValues
+                | ErrorKind::ValueValidation => {
                     if args_raw.len() >= 2 {
                         let sub = &args_raw[1];
                         let mut cmd = ZksArgs::build_command();
                         if let Some(sub_cmd) = cmd.find_subcommand_mut(sub) {
-                             eprintln!("Error: {}\n", e);
-                             sub_cmd.print_help().unwrap_or_default();
-                             println!();
-                             std::process::exit(e.exit_code());
+                            eprintln!("Error: {}\n", e);
+                            sub_cmd.print_help().unwrap_or_default();
+                            println!();
+                            std::process::exit(e.exit_code());
                         }
                     }
                 }
@@ -202,7 +217,7 @@ fn run_app() -> Result<(), ZksError> {
             e.exit();
         }
     };
-    
+
     use clap::FromArgMatches;
     let args = ZksArgs::from_arg_matches(&matches)
         .map_err(|e| {
@@ -211,20 +226,28 @@ fn run_app() -> Result<(), ZksError> {
         .unwrap();
 
     match args.command {
-        Commands::Freeze { 
-            args, 
-            encrypt, 
-            read, 
-            overwrite_files, 
+        Commands::Freeze {
+            args,
+            encrypt,
+            read,
+            overwrite_files,
             overwrite_luks_content,
             no_progress,
             vanilla_progress: _vanilla_progress,
             alfa_progress,
             compression,
             dereference,
+            prefix,
         } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
             let executor = RealSystem;
+
+            // If output is a directory, resolve to a full file path
+            let output = if output.is_dir() {
+                resolve_directory_output(&output, prefix, encrypt)?
+            } else {
+                output
+            };
 
             let progress_mode = if no_progress {
                 engine::ProgressMode::None
@@ -235,8 +258,8 @@ fn run_app() -> Result<(), ZksError> {
                 engine::ProgressMode::Vanilla
             };
 
-            let options = FreezeOptions { 
-                encrypt, 
+            let options = FreezeOptions {
+                encrypt,
                 output,
                 overwrite_files,
                 overwrite_luks_content,
@@ -244,22 +267,28 @@ fn run_app() -> Result<(), ZksError> {
                 compression,
                 dereference,
             };
-            
+
             // Log info
             // println!("Freezing {:?} to {:?}", targets, options.output);
-            
+
             // engine::freeze(&targets, &options, &executor)?;
             if let Err(e) = engine::freeze(&targets, &options, &executor) {
-                 if utils::is_permission_denied(&e) {
-                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during freeze. Retrying with elevation...")? {
-                           return utils::re_exec_with_runner(&runner);
-                      }
-                 }
-                 return Err(e);
+                if utils::is_permission_denied(&e) {
+                    if let Some(runner) = utils::check_root_or_get_runner(
+                        "Permission denied during freeze. Retrying with elevation...",
+                    )? {
+                        return utils::re_exec_with_runner(&runner);
+                    }
+                }
+                return Err(e);
             }
             println!("Successfully created archive: {:?}", options.output);
         }
-        Commands::Unfreeze { archive_path, overwrite, skip_existing } => {
+        Commands::Unfreeze {
+            archive_path,
+            overwrite,
+            skip_existing,
+        } => {
             let options = UnfreezeOptions {
                 overwrite,
                 skip_existing,
@@ -267,58 +296,122 @@ fn run_app() -> Result<(), ZksError> {
             let executor = RealSystem;
             // engine::unfreeze(&archive_path, &options, &executor)?;
             if let Err(e) = engine::unfreeze(&archive_path, &options, &executor) {
-                 if utils::is_permission_denied(&e) {
-                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during unfreeze. Retrying with elevation...")? {
-                           return utils::re_exec_with_runner(&runner);
-                      }
-                 }
-                 return Err(e);
+                if utils::is_permission_denied(&e) {
+                    if let Some(runner) = utils::check_root_or_get_runner(
+                        "Permission denied during unfreeze. Retrying with elevation...",
+                    )? {
+                        return utils::re_exec_with_runner(&runner);
+                    }
+                }
+                return Err(e);
             }
             println!("Unfreeze completed successfully.");
         }
-        Commands::Check { archive_path, use_cmp, force_delete } => {
+        Commands::Check {
+            archive_path,
+            use_cmp,
+            delete,
+        } => {
             let executor = RealSystem;
-            let options = engine::CheckOptions {
-                use_cmp,
-                force_delete,
-            };
+            let options = engine::CheckOptions { use_cmp, delete };
             // engine::check(&archive_path, &options, &executor)?;
             if let Err(e) = engine::check(&archive_path, &options, &executor) {
-                 if utils::is_permission_denied(&e) {
-                      if let Some(runner) = utils::check_root_or_get_runner("Permission denied during check. Retrying with elevation...")? {
-                           return utils::re_exec_with_runner(&runner);
-                      }
-                 }
-                 return Err(e);
+                if utils::is_permission_denied(&e) {
+                    if let Some(runner) = utils::check_root_or_get_runner(
+                        "Permission denied during check. Retrying with elevation...",
+                    )? {
+                        return utils::re_exec_with_runner(&runner);
+                    }
+                }
+                return Err(e);
             }
             println!("Check completed successfully.");
         }
     }
-    
+
     Ok(())
 }
 
-fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Result<(Vec<PathBuf>, PathBuf), ZksError> {
-    // Logic: 
+/// Resolve output directory to a full file path with auto-generated name.
+/// If `prefix` is Some, uses it directly. Otherwise, prompts the user interactively.
+fn resolve_directory_output(
+    dir: &Path,
+    prefix: Option<String>,
+    encrypt: bool,
+) -> Result<PathBuf, ZksError> {
+    let prefix = match prefix {
+        Some(p) => p,
+        None => prompt_for_prefix()?,
+    };
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| ZksError::OperationFailed(format!("Time error: {}", e)))?
+        .as_secs();
+    let rnd: u32 = rand::rng().random_range(100000..999999u32);
+    let ext = if encrypt { "sqfs_luks.img" } else { "sqfs" };
+    let filename = format!("{}_{}_{}.{}", prefix, timestamp, rnd, ext);
+
+    let final_path = dir.join(filename);
+    eprintln!("Auto-generated output filename: {}", final_path.display());
+    Ok(final_path)
+}
+
+/// Prompt user interactively via stderr/stdin to enter a prefix for the output filename.
+fn prompt_for_prefix() -> Result<String, ZksError> {
+    use std::io::{self, BufRead, Write};
+
+    eprint!("Output is a directory. Enter a prefix for the archive filename: ");
+    io::stderr().flush().map_err(ZksError::IoError)?;
+
+    let stdin = io::stdin();
+    let line = stdin
+        .lock()
+        .lines()
+        .next()
+        .ok_or_else(|| {
+            ZksError::OperationFailed("Failed to read prefix from stdin (no input)".into())
+        })?
+        .map_err(ZksError::IoError)?;
+
+    let trimmed = line.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(ZksError::OperationFailed("Prefix cannot be empty".into()));
+    }
+    // Sanitize: disallow path separators and other problematic characters
+    if trimmed.contains('/') || trimmed.contains('\0') {
+        return Err(ZksError::OperationFailed(
+            "Prefix cannot contain '/' or null characters".into(),
+        ));
+    }
+    Ok(trimmed)
+}
+
+fn resolve_freeze_args(
+    mut args: Vec<PathBuf>,
+    read_file: Option<PathBuf>,
+) -> Result<(Vec<PathBuf>, PathBuf), ZksError> {
+    // Logic:
     // Last argument is Output Path (Archive).
     // Preceding arguments are Targets.
     // If -r file provided, read lines and add to Targets.
-    
+
     // 1. Determine Output Path
     if args.is_empty() {
-        return Err(ZksError::MissingTarget("Destination archive path is required".into()));
+        return Err(ZksError::MissingTarget(
+            "Destination archive path is required".into(),
+        ));
     }
-    
+
     let output_path = args.pop().unwrap(); // Last one
-    
+
     // 2. Collect Targets
     let mut targets = args; // The rest are targets
-    
+
     // 3. Read from file if provided
     if let Some(path) = read_file {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| ZksError::IoError(e))?;
-            
+        let content = fs::read_to_string(&path).map_err(|e| ZksError::IoError(e))?;
+
         for line in content.lines() {
             let trimmed = line.trim();
             if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -328,14 +421,16 @@ fn resolve_freeze_args(mut args: Vec<PathBuf>, read_file: Option<PathBuf>) -> Re
             }
         }
     }
-    
+
     if targets.is_empty() {
-        return Err(ZksError::MissingTarget("No targets specified to freeze".into()));
+        return Err(ZksError::MissingTarget(
+            "No targets specified to freeze".into(),
+        ));
     }
-    
+
     // 4. Handle Output Directory case
     // squash_manager-rs now handles directory selection/autonaming.
-    
+
     Ok((targets, output_path))
 }
 
@@ -360,7 +455,8 @@ mod tests {
             "-e",
             "--read",
             "/tmp/list.txt",
-            "-c", "19",
+            "-c",
+            "19",
         ]);
 
         match args.command {
@@ -375,6 +471,7 @@ mod tests {
                 alfa_progress,
                 compression,
                 dereference,
+                prefix,
             } => {
                 assert_eq!(args[0], PathBuf::from("/home/user/data"));
                 assert_eq!(args[1], PathBuf::from("/mnt/backup/data.sqfs"));
@@ -387,6 +484,7 @@ mod tests {
                 assert!(!alfa_progress); // not passed
                 assert_eq!(compression, Some(19));
                 assert!(!dereference);
+                assert_eq!(prefix, None); // not passed
             }
             _ => panic!("Expected Freeze command"),
         }
@@ -395,24 +493,37 @@ mod tests {
     #[test]
     fn test_parse_freeze_progress_flags() {
         // Test vanilla-progress
-        let args = ZksArgs::parse_from(&[
-            "zks", "freeze", "target", "out.sqfs", "--vanilla-progress"
-        ]);
-        if let Commands::Freeze { vanilla_progress, no_progress, alfa_progress, compression, .. } = args.command {
+        let args =
+            ZksArgs::parse_from(&["zks", "freeze", "target", "out.sqfs", "--vanilla-progress"]);
+        if let Commands::Freeze {
+            vanilla_progress,
+            no_progress,
+            alfa_progress,
+            compression,
+            ..
+        } = args.command
+        {
             assert!(vanilla_progress);
             assert!(!no_progress);
             assert!(!alfa_progress);
             assert_eq!(compression, None);
-        } else { panic!("Wrong command"); }
+        } else {
+            panic!("Wrong command");
+        }
 
         // Test no-progress
-        let args = ZksArgs::parse_from(&[
-            "zks", "freeze", "target", "out.sqfs", "--no-progress"
-        ]);
-        if let Commands::Freeze { vanilla_progress, no_progress, .. } = args.command {
+        let args = ZksArgs::parse_from(&["zks", "freeze", "target", "out.sqfs", "--no-progress"]);
+        if let Commands::Freeze {
+            vanilla_progress,
+            no_progress,
+            ..
+        } = args.command
+        {
             assert!(no_progress);
             assert!(!vanilla_progress);
-        } else { panic!("Wrong command"); }
+        } else {
+            panic!("Wrong command");
+        }
     }
 
     #[test]
@@ -428,11 +539,11 @@ mod tests {
             Commands::Check {
                 archive_path,
                 use_cmp,
-                force_delete,
+                delete,
             } => {
                 assert_eq!(archive_path, PathBuf::from("archive.sqfs"));
                 assert!(use_cmp);
-                assert!(force_delete);
+                assert!(delete);
             }
             _ => panic!("Expected Check command"),
         }
@@ -457,10 +568,10 @@ mod tests {
         writeln!(tmp, "file_from_list").unwrap();
         writeln!(tmp, " # comment").unwrap();
         writeln!(tmp, "file2_from_list").unwrap();
-        
+
         let file_path = tmp.path().to_path_buf();
         let args = vec![PathBuf::from("cli_target"), PathBuf::from("out.sqfs")];
-        
+
         let (targets, out) = super::resolve_freeze_args(args, Some(file_path)).unwrap();
         assert_eq!(out, PathBuf::from("out.sqfs"));
         assert_eq!(targets.len(), 3);
@@ -474,5 +585,47 @@ mod tests {
         let args = vec![];
         let res = super::resolve_freeze_args(args, None);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_parse_freeze_with_prefix() {
+        let args =
+            ZksArgs::parse_from(&["zks", "freeze", "target", "out_dir", "--prefix", "mybackup"]);
+        if let Commands::Freeze { prefix, .. } = args.command {
+            assert_eq!(prefix, Some("mybackup".to_string()));
+        } else {
+            panic!("Wrong command");
+        }
+    }
+
+    #[test]
+    fn test_parse_freeze_with_short_prefix() {
+        let args = ZksArgs::parse_from(&["zks", "freeze", "target", "out_dir", "-p", "mybackup"]);
+        if let Commands::Freeze { prefix, .. } = args.command {
+            assert_eq!(prefix, Some("mybackup".to_string()));
+        } else {
+            panic!("Wrong command");
+        }
+    }
+
+    #[test]
+    fn test_resolve_directory_output_with_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let result =
+            super::resolve_directory_output(dir.path(), Some("myprefix".into()), false).unwrap();
+        let filename = result.file_name().unwrap().to_str().unwrap();
+        assert!(filename.starts_with("myprefix_"));
+        assert!(filename.ends_with(".sqfs"));
+        assert_eq!(result.parent().unwrap(), dir.path());
+    }
+
+    #[test]
+    fn test_resolve_directory_output_encrypted() {
+        let dir = tempfile::tempdir().unwrap();
+        let result =
+            super::resolve_directory_output(dir.path(), Some("secret".into()), true).unwrap();
+        let filename = result.file_name().unwrap().to_str().unwrap();
+        assert!(filename.starts_with("secret_"));
+        assert!(filename.ends_with(".sqfs_luks.img"));
     }
 }

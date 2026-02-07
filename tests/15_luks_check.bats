@@ -83,7 +83,7 @@ teardown() {
     # Make local file newer
     touch -d "next hour" "$SRC/file1.txt"
 
-    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE\" --force-delete"
+    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE\" --delete"
     assert_success
     assert_output --partial "SKIPPED (Newer)"
     assert [ -f "$SRC/file1.txt" ]
@@ -93,7 +93,7 @@ teardown() {
     # Ensure local file is older/same
     touch -d "last hour" "$SRC/file1.txt"
 
-    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE\" --force-delete"
+    run bash -c "printf 'testpass\n' | ${ROOT_CMD:-} \"$ZKS_BIN\" check \"$ARCHIVE\" --delete"
     assert_success
     assert_output --partial "DELETED"
     assert [ ! -f "$SRC/file1.txt" ]

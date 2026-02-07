@@ -42,26 +42,44 @@ teardown() {
     assert_output --partial "exists"
 }
 
-@test "Freeze: Auto-generate name if output is directory" {
-    # Directory exists
-    run $ZKS_BIN freeze "$SRC" "$TEST_DIR"
+@test "Freeze: Auto-generate name if output is directory (with --prefix)" {
+    # Directory exists, use --prefix to skip interactive prompt
+    run $ZKS_BIN freeze "$SRC" "$TEST_DIR" --prefix testarchive
     assert_success
 
-    # Check that a .sqfs file was created inside TEST_DIR
-    # проверяем и тип файла и расширение т.к.
-    # имя файла вместе с раширением автогенерируется
-    # прогой, а не произвольно задаётся пользователем
-    run find "$TEST_DIR" -maxdepth 1 -name "*.sqfs"
+    # Check that a .sqfs file with the correct prefix was created inside TEST_DIR
+    run find "$TEST_DIR" -maxdepth 1 -name "testarchive_*.sqfs"
+    assert_line --index 0 --partial "testarchive_"
     assert_line --index 0 --partial ".sqfs"
 
-    # 1. Find ANY file created in that dir
-    run find "$TEST_DIR" -maxdepth 1 -type f
-    assert_line --index 0 --partial "$TEST_DIR"
     local created_file="${lines[0]}"
 
-    # 2. Verify it is a SquashFS archive using 'file' utility
+    # Verify it is a SquashFS archive using 'file' utility
     run file "$created_file"
     assert_output --partial "Squashfs filesystem"
+}
+
+@test "Freeze: Auto-generate name with interactive prefix (via stdin)" {
+    # Pipe prefix via stdin to simulate interactive input
+    run bash -c "echo 'interactive_test' | \"$ZKS_BIN\" freeze \"$SRC\" \"$TEST_DIR\""
+    assert_success
+
+    # Check that a .sqfs file with the interactive prefix was created
+    run find "$TEST_DIR" -maxdepth 1 -name "interactive_test_*.sqfs"
+    assert_line --index 0 --partial "interactive_test_"
+    assert_line --index 0 --partial ".sqfs"
+
+    local created_file="${lines[0]}"
+    run file "$created_file"
+    assert_output --partial "Squashfs filesystem"
+}
+
+
+@test "Freeze: Fail if interactive prefix is empty" {
+    # Pipe empty string
+    run bash -c "echo '' | \"$ZKS_BIN\" freeze \"$SRC\" \"$TEST_DIR\""
+    assert_failure
+    assert_output --partial "empty"
 }
 
 @test "Freeze: Using -r (read from file)" {
@@ -192,4 +210,58 @@ teardown() {
         assert_output --partial "name: t1"
         assert_output --partial "name: t2"
     fi
+}
+
+# --- Prefix and Payload Structure Tests ---
+
+@test "Freeze: Internal sqfs structure uses 'payload' as root (not target name)" {
+    if ! command -v unsquashfs >/dev/null; then
+        skip "unsquashfs not found"
+    fi
+
+    # Create a directory with a specific name
+    CUSTOM_SRC="$TEST_DIR/my_custom_data"
+    mkdir -p "$CUSTOM_SRC"
+    echo "test" > "$CUSTOM_SRC/testfile.txt"
+
+    OUT="$TEST_DIR/structure_test.sqfs"
+    run $ZKS_BIN freeze "$CUSTOM_SRC" "$OUT"
+    assert_success
+
+    # Verify the sqfs root does NOT contain a "my_custom_data" directory
+    # but contains list.yaml and to_restore at the root level
+    run unsquashfs -l "$OUT"
+    assert_success
+    assert_output --partial "list.yaml"
+    assert_output --partial "to_restore"
+
+    # The root inside sqfs should be flat (list.yaml + to_restore), not nested under target name
+    # "my_custom_data" should only appear inside to_restore/1/
+    run unsquashfs -l "$OUT"
+    assert_output --partial "to_restore/1/my_custom_data"
+}
+
+@test "Freeze: Prefix flag does not affect internal sqfs structure" {
+    if ! command -v unsquashfs >/dev/null; then
+        skip "unsquashfs not found"
+    fi
+
+    OUT_DIR="$TEST_DIR/output_dir"
+    mkdir -p "$OUT_DIR"
+
+    run $ZKS_BIN freeze "$SRC" "$OUT_DIR" --prefix customprefix
+    assert_success
+
+    # Find the created file
+    local created_file
+    created_file=$(find "$OUT_DIR" -maxdepth 1 -name "customprefix_*.sqfs" -print -quit)
+    [ -n "$created_file" ]
+
+    # Verify prefix is in filename only, not in sqfs structure
+    run unsquashfs -l "$created_file"
+    assert_success
+    assert_output --partial "list.yaml"
+    assert_output --partial "to_restore"
+    # "customprefix" should NOT appear inside the archive
+    refute_output --partial "customprefix"
 }

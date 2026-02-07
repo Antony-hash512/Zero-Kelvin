@@ -69,7 +69,7 @@ Freeze Options:
 
 Check Options:
   --use-cmp                             Verify file content (byte-by-byte) in addition to size
-  --force-delete                        Delete local files if they match the archive (Destructive!)
+  --delete                        Delete local files if they match the archive (Destructive!)
 Examples:
   zks freeze /home/user/project /mnt/nas/data/backup.sqfs
   zks freeze -e /secret/data /mnt/nas/data/secret.sqfs_luks.img
