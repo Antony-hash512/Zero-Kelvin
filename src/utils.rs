@@ -1,6 +1,6 @@
 use crate::error::ZksError;
-use std::fs;
 use log::warn;
+use std::fs;
 
 // Stub implementation for TDD phase
 
@@ -28,7 +28,7 @@ pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError
     if is_root()? {
         return Ok(None);
     }
-    
+
     // Not root, check for runner
     if let Some(runner) = get_superuser_command() {
         warn!("{}", reason); // Using log::warn as implied by context
@@ -36,8 +36,10 @@ pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError
         eprintln!("Info: {}", reason);
         return Ok(Some(runner));
     }
-    
-    Err(ZksError::OperationFailed("Root privileges required but no elevation tool (sudo, doas, etc.) found.".to_string()))
+
+    Err(ZksError::OperationFailed(
+        "Root privileges required but no elevation tool (sudo, doas, etc.) found.".to_string(),
+    ))
 }
 
 pub fn is_permission_denied(err: &ZksError) -> bool {
@@ -45,34 +47,38 @@ pub fn is_permission_denied(err: &ZksError) -> bool {
         ZksError::IoError(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
         ZksError::OperationFailed(msg) => {
             let msg_lower = msg.to_lowercase();
-            msg_lower.contains("permission denied") || 
-            msg_lower.contains("operation not permitted") ||
-            msg_lower.contains("cannot initialize device-mapper") ||
-            msg_lower.contains("must be run as root")
-        },
+            msg_lower.contains("permission denied")
+                || msg_lower.contains("operation not permitted")
+                || msg_lower.contains("cannot initialize device-mapper")
+                || msg_lower.contains("must be run as root")
+                || msg_lower.contains("insufficient read permissions")
+        }
         _ => false,
     }
 }
 
 pub fn re_exec_with_runner(runner: &str) -> Result<(), ZksError> {
     use std::os::unix::process::CommandExt;
-    
+
     let args: Vec<String> = std::env::args().collect();
     // args[0] is the current binary path
     let program = &args[0];
     let cmd_args = &args[1..];
-    
+
     // Construct command: runner program args...
     // But Runner might be "sudo".
     // We want: sudo /path/to/zks freeze ...
-    
+
     let err = std::process::Command::new(runner)
         .arg(program)
         .args(cmd_args)
         .exec();
-        
+
     // exec replaces the process, so we only return if it fails
-    Err(ZksError::OperationFailed(format!("Failed to re-execute with {}: {}", runner, err)))
+    Err(ZksError::OperationFailed(format!(
+        "Failed to re-execute with {}: {}",
+        runner, err
+    )))
 }
 
 // Helpers for testing (not exposed)
@@ -84,11 +90,15 @@ fn parse_uid_from_status(content: &str) -> Result<u32, ZksError> {
             let parts: Vec<&str> = line.split_whitespace().collect();
             // parts[0] is "Uid:", parts[1] is RW, parts[2] is EUID
             if parts.len() >= 3 {
-                return parts[2].parse().map_err(|e| ZksError::OperationFailed(format!("Failed to parse UID: {}", e)));
+                return parts[2]
+                    .parse()
+                    .map_err(|e| ZksError::OperationFailed(format!("Failed to parse UID: {}", e)));
             }
         }
     }
-    Err(ZksError::OperationFailed("Uid field not found in status".to_string()))
+    Err(ZksError::OperationFailed(
+        "Uid field not found in status".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -97,7 +107,7 @@ mod tests {
 
     // --- is_root() tests ---
     // Since is_root interacts with OS, we test the parsing logic primarily
-    
+
     #[test]
     fn test_parse_uid_effective_root() {
         // "Uid: Real Effective Saved Filesystem"
@@ -114,35 +124,35 @@ mod tests {
         let uid = parse_uid_from_status(status_content).unwrap();
         assert_eq!(uid, 1000, "Should parse effective UID as 1000");
     }
-    
+
     #[test]
     fn test_parse_uid_standard_user() {
         let status_content = "Uid:\t1000\t1000\t1000\t1000";
         let uid = parse_uid_from_status(status_content).unwrap();
         assert_eq!(uid, 1000);
     }
-    
+
     // --- check_root_or_get_runner tests ---
     // We can't easily mock is_root() and get_superuser_command() here without dependency injection or conditional compilation mocking.
-    // For now, we will verify the parser logic as requested in the Prompt. 
-    // Testing get_superuser_command() implies testing `which` or system state. 
-    
-    // We can add a "simulated" test that doesn't rely on system state if we refactor `check_root_or_get_runner` 
+    // For now, we will verify the parser logic as requested in the Prompt.
+    // Testing get_superuser_command() implies testing `which` or system state.
+
+    // We can add a "simulated" test that doesn't rely on system state if we refactor `check_root_or_get_runner`
     // to take a closure for `is_root_check`. But let's stick to the prompt's request for "unit tests for parser".
 
     // --- check_read_permissions tests ---
-    
+
     #[test]
     fn test_check_read_permissions_readable() {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("readable.txt");
         fs::write(&file, "content").unwrap();
-        
+
         // Pass slice of PathBuf
         let paths = vec![file];
         assert!(check_read_permissions(&paths).unwrap());
     }
-    
+
     #[test]
     fn test_check_read_permissions_unreadable() {
         // Skip this test if we are root, because root can read everything
@@ -153,13 +163,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("secret.txt");
         fs::write(&file, "content").unwrap();
-        
+
         // Make unreadable
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&file).unwrap().permissions();
         perms.set_mode(0o000);
         fs::set_permissions(&file, perms).unwrap();
-        
+
         let paths = vec![file];
         assert!(!check_read_permissions(&paths).unwrap());
     }
@@ -170,10 +180,10 @@ use std::path::PathBuf;
 pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool, ZksError> {
     for path in paths {
         // If path doesn't exist, we can't read it. But usually this should be checked before.
-        // If it doesn't exist, returning error or false? 
+        // If it doesn't exist, returning error or false?
         // Logic: "analyze permissions to targets". If target missing, freeze should fail.
         // Return error if missing.
-        
+
         let metadata = fs::metadata(path).map_err(|_| ZksError::InvalidPath(path.clone()))?;
 
         if metadata.is_dir() {
@@ -204,7 +214,6 @@ pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
     Ok(())
 }
 
-
 /// Returns the path to /tmp/stazis-<uid> without ensuring it exists.
 pub fn get_stazis_temp_dir_path() -> Result<PathBuf, ZksError> {
     let uid = get_current_uid()?;
@@ -214,8 +223,8 @@ pub fn get_stazis_temp_dir_path() -> Result<PathBuf, ZksError> {
 /// Returns the path to /tmp/stazis-<uid> and ensures it exists with 0700 permissions.
 /// Uses atomic mkdir + ownership verification to prevent symlink attacks (TOCTOU).
 pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
-    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
     let path = get_stazis_temp_dir_path()?;
     let uid = get_current_uid()?;
 
@@ -223,7 +232,9 @@ pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
     match fs::create_dir(&path) {
         Ok(()) => {
             // We just created it — set permissions.
-            let mut perms = fs::metadata(&path).map_err(ZksError::IoError)?.permissions();
+            let mut perms = fs::metadata(&path)
+                .map_err(ZksError::IoError)?
+                .permissions();
             perms.set_mode(0o700);
             fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
         }
@@ -235,19 +246,24 @@ pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
             let meta = fs::symlink_metadata(&path).map_err(ZksError::IoError)?;
 
             if meta.file_type().is_symlink() {
-                return Err(ZksError::StagingError(
-                    format!("Security: {:?} is a symlink (possible attack). Refusing to use.", path)
-                ));
+                return Err(ZksError::StagingError(format!(
+                    "Security: {:?} is a symlink (possible attack). Refusing to use.",
+                    path
+                )));
             }
             if !meta.is_dir() {
-                return Err(ZksError::StagingError(
-                    format!("Security: {:?} exists but is not a directory.", path)
-                ));
+                return Err(ZksError::StagingError(format!(
+                    "Security: {:?} exists but is not a directory.",
+                    path
+                )));
             }
             if meta.uid() != uid {
-                return Err(ZksError::StagingError(
-                    format!("Security: {:?} is owned by uid {} but we are uid {}. Refusing to use.", path, meta.uid(), uid)
-                ));
+                return Err(ZksError::StagingError(format!(
+                    "Security: {:?} is owned by uid {} but we are uid {}. Refusing to use.",
+                    path,
+                    meta.uid(),
+                    uid
+                )));
             }
 
             // Fix permissions if needed
@@ -294,7 +310,10 @@ mod tests_expand {
     fn test_expand_tilde_path() {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         let expanded = expand_tilde("~/Documents/file.txt");
-        assert_eq!(expanded, PathBuf::from(format!("{}/Documents/file.txt", home)));
+        assert_eq!(
+            expanded,
+            PathBuf::from(format!("{}/Documents/file.txt", home))
+        );
     }
 
     #[test]
