@@ -142,7 +142,7 @@ teardown() {
     touch "$TEST_DIR/bad.xyz"
     run $ZKS_SQM_BIN create "$TEST_DIR/bad.xyz" "$OUTPUT_SQFS"
     [ "$status" -ne 0 ]
-    [[ "$output" == *"Unsupported archive format"* ]]
+    [[ "$output" == *"Unsupported or unknown archive format"* ]]
 }
 
 # @test "Negative: Missing external tool (fake-check)" {
