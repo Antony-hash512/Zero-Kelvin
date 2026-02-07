@@ -10,7 +10,8 @@
 ## 🚀 Key Features
 
 - **Offloading, not just Backup:** Conceptually move data to cold storage with safe verification and optional deletion.
-- **Rootless Freeze:** Uses User Namespaces (`unshare`) to archive sensitive files without requiring `sudo` whenever possible.
+- **Rootless Freeze:** Uses User Namespaces (`unshare`) to archive sensitive files without requiring privilege escalation whenever possible.
+   > **Note on Encryption:** Using `-e`/`--encrypt` is the operation that strictly mandates `root`. This is because `cryptsetup` must create mappings in the kernel's Device Mapper to manage encrypted block devices, which is a privileged operation unavailable to standard users.
 - **Instant Access:** Archives are SquashFS images. Mount them instantly to browse files without full extraction.
 - **Zero-Knowledge Privacy:** Supports LUKS-encrypted containers (via `squash_manager-rs`) for secure "black box" archiving.
 - **Contextual Sets:** Bundle logical projects spread across your filesystem into a single atomic archive.
@@ -73,6 +74,7 @@ zks-rs check --force-delete /mnt/nas/archives/old-work.sqfs
 1. **Low Friction:** Restoration should be as simple as `Ctrl+Z`.
 2. **KISS & Native:** Uses standard Linux tools (`rsync`, `mksquashfs`, `cryptsetup`) so your data is never locked into a proprietary format.
 3. **User-Space Friendly:** Prefers FUSE (`squashfuse`) and namespaces over root privileges.
+
 
 ---
 
