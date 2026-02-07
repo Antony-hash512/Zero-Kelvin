@@ -742,7 +742,18 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             overwrite_files,
             overwrite_luks_content,
         } => {
-            // Check Privilege for LUKS
+            // 1. Check if input exists (First validation)
+            if !input_path.exists() {
+                return Err(ZksError::InvalidPath(input_path.clone()));
+            }
+
+            // 2. Check Input Type for Encryption
+            // Currently, we only support encrypting DIRECTORIES, not single files/archives
+            if encrypt && !input_path.is_dir() {
+                 return Err(ZksError::OperationFailed("Encrypted mode (-e) currently supports only DIRECTORIES.\nPlease extract the archive first and point to the directory.".to_string()));
+            }
+
+            // 3. Check Privilege for LUKS
             if encrypt {
                 #[cfg(not(test))]
                 {
@@ -1173,10 +1184,10 @@ pub fn run(args: SquashManagerArgs, executor: &impl CommandExecutor) -> Result<(
             }
 
 
-            // 1. Check if input exists
-            if !input_path.exists() {
-                return Err(ZksError::InvalidPath(input_path.clone()));
-            }
+            // 1. Check if input exists - Moved to top
+            // if !input_path.exists() {
+            //     return Err(ZksError::InvalidPath(input_path.clone()));
+            // }
 
             // 2. Archive Repacking (File -> SquashFS)
             if input_path.is_file() {
