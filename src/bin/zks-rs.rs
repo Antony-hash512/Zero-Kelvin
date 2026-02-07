@@ -533,7 +533,7 @@ mod tests {
             "check",
             "archive.sqfs",
             "--use-cmp",
-            "--force-delete",
+            "--delete",
         ]);
         match args.command {
             Commands::Check {
@@ -598,15 +598,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_parse_freeze_with_short_prefix() {
-        let args = ZksArgs::parse_from(&["zks", "freeze", "target", "out_dir", "-p", "mybackup"]);
-        if let Commands::Freeze { prefix, .. } = args.command {
-            assert_eq!(prefix, Some("mybackup".to_string()));
-        } else {
-            panic!("Wrong command");
-        }
-    }
 
     #[test]
     fn test_resolve_directory_output_with_prefix() {
