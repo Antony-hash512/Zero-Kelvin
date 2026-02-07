@@ -13,6 +13,13 @@
 A Rust port of the `zero-kelvin-store` function set (originally written for Fish shell), the utility packs projects into compressed, mountable **SquashFS** images. It supports optional transparent encryption via standard **LUKS** (`cryptsetup`).
 - **Primary Goal:** To free up disk space while maintaining instant read-only access without the need for decompression, with the ability to extract individual files or the entire archive.
 
+### ⚙️ System Requirements
+
+*   **Linux Kernel:** 5.10+ (for `unshare` and `user namespace` features)
+*   **Essential Tools:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`, `file`
+*   **Optional Tools:** `rclone` (for `--direct-rclone` streaming), `doas`, `pkexec`, `run0` (alternative privilege escalators)
+
+
 ---
 
 ### 🚀 Key Features
@@ -114,6 +121,12 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 - **Zero-Kelvin Stazis (zks-rs)** — это высокопроизводительная утилита для «консервации» данных с полным сохранением их целостности, атрибутов (прав доступа, владельцев, временных меток), иерархии и распольожения относительно корня файловой системы.
 Являясь портом на Rust набора функций `zero-kelvin-store` (изначально написанных для Fish shell), утилита упаковывает проекты в сжатые, монтируемые образы **SquashFS**. Поддерживается опциональное прозрачное шифрование через стандартный **LUKS** (`cryptsetup`).
 - **Главная цель**: освобождение дискового пространства при сохранении мгновенного доступа к данным без необходимости распаковки (read-only) и возможностью распакавать к любые файлы как по отдельности так и весь архив целиком.
+
+### ⚙️ Системные требования
+
+*   **Ядро Linux:** 5.10+ (для функций `unshare` и `user namespace`)
+*   **Основные утилиты:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`, `file`
+*   **Дополнительные утилиты:** `rclone` (для потоковой передачи `--direct-rclone`), `doas`, `pkexec`, `run0` (альтернативные эскалаторы привилегий)
 
 ---
 
