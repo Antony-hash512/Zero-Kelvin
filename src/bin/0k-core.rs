@@ -334,7 +334,7 @@ impl Args {
       OUTPUT                (Optional) Path to the resulting image.
     Options:
       -e, --encrypt         Create an encrypted LUKS container (Requires root/sudo).
-      -c, --compression N   Zstd compression level (default: {1}).
+      -c, --compression N   Zstd compression level (default: {1}) 0 = no compression.
       --no-progress         Disable progress bar completely.
       --vanilla-progress    Use native mksquashfs progress (explicit, also default).
       --alfa-progress       Use experimental custom progress bar (broken, for testing).

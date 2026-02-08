@@ -39,7 +39,7 @@ impl Args {
     Options:
       -e, --encrypt         Encrypt the archive using LUKS (via 0k-core).
       -r, --read <FILE>     Read list of targets from a file.
-      -c, --compression N   Zstd compression level (default: {1}).
+      -c, --compression N   Zstd compression level (default: {1}) 0 = no compression.
           --prefix <NAME>   Prefix for auto-generated filename
                             (when ARCHIVE_PATH is a directory).
                             If omitted, you will be prompted interactively.
