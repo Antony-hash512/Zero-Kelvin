@@ -229,38 +229,64 @@ fn clear_cleanup_path() {
 }
 
 fn cleanup_on_interrupt() {
+    // CAPTURE STATE EARLY:
+    // We must grab the mapper name and cleanup path immediately.
+    // Otherwise, killing the child process (pkill) might cause the main thread
+    // to wake up, drop the Transaction, and clear these globals (via Drop)
+    // while we are still sleeping/waiting in this handler.
+    
+    let mapper_name = if let Ok(guard) = get_cleanup_mapper().lock() {
+        guard.clone()
+    } else {
+        None
+    };
+
+    let file_path = if let Ok(guard) = get_cleanup_path().lock() {
+        guard.clone()
+    } else {
+        None
+    };
+
     // 1. Close mapper if exists (must happen BEFORE file removal)
-    if let Ok(guard) = get_cleanup_mapper().lock() {
-        if let Some(mapper) = guard.as_ref() {
-            eprintln!("\nInterrupted! Closing LUKS mapper: {}", mapper);
-            
-            // Critical: Kill child processes (mksquashfs) which might be holding the device open
-            let my_pid = process::id();
-            let _ = process::Command::new("pkill")
-                .arg("-P")
-                .arg(my_pid.to_string())
-                .status();
+    if let Some(mapper) = mapper_name {
+        eprintln!("\nInterrupted! Closing LUKS mapper: {}", mapper);
+        
+        // Critical: Kill child processes (mksquashfs) which might be holding the device open
+        let my_pid = process::id();
+        let _ = process::Command::new("pkill")
+            .arg("-P")
+            .arg(my_pid.to_string())
+            .status();
 
-            // Give a moment for the kernel/device release
-            std::thread::sleep(Duration::from_millis(200));
+        // Give a moment for the kernel/device release
+        std::thread::sleep(Duration::from_millis(200));
 
-            let root_cmds = get_effective_root_cmd();
+        let root_cmds = get_effective_root_cmd();
+        
+        // We use standard process::Command here because we are in a signal handler context
+        // and don't have access to the executor trait.
+        // Retry loop to ensure close succeeds even if device is busy for a moment
+        for i in 0..5 {
             let mut args = root_cmds.clone();
             args.extend(vec!["cryptsetup".to_string(), "close".to_string(), mapper.clone()]);
             
-            // We use standard process::Command here because we are in a signal handler context
-            // and don't have access to the executor trait.
             let prog = args.remove(0);
-            let _ = process::Command::new(prog).args(args).status();
+            if let Ok(status) = process::Command::new(prog).args(args).status() {
+                if status.success() {
+                    break;
+                }
+            }
+            // Backoff
+            std::thread::sleep(Duration::from_millis(100 * (i + 1)));
         }
     }
 
     // 2. Remove file
-    if let Ok(guard) = get_cleanup_path().lock() {
-        if let Some(path) = guard.as_ref() {
-            if path.exists() {
-                eprintln!("Interrupted! Cleaning up file: {:?}", path);
-                let _ = fs::remove_file(path);
+    if let Some(path) = file_path {
+        if path.exists() {
+            eprintln!("Interrupted! Cleaning up file: {:?}", path);
+            if let Err(e) = fs::remove_file(&path) {
+                eprintln!("Error cleaning up file {:?}: {}", path, e);
             }
         }
     }
