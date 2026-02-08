@@ -7,7 +7,7 @@ setup() {
     # Create test environment
     export TEST_DIR="$(mktemp -d)"
     mkdir -p "$TEST_DIR"
-    export ZKS_BIN="${ZKS_BIN:-$BATS_TEST_DIRNAME/../target/debug/zks-rs}"
+    export ZKS_BIN="${ZKS_BIN:-$BATS_TEST_DIRNAME/../target/debug/0k}"
     
     # Ensure binaries are in PATH
     export PATH="$(dirname "$ZKS_BIN"):$PATH"
@@ -20,7 +20,7 @@ setup() {
 
     # Create dummy archive
     export ARCHIVE="$TEST_DIR/archive.sqfs"
-    run zks-rs freeze "$SRC" "$ARCHIVE" --no-progress
+    run 0k freeze "$SRC" "$ARCHIVE" --no-progress
     assert_success
 }
 
@@ -29,7 +29,7 @@ teardown() {
 }
 
 @test "Check: Detect matching files" {
-    run zks-rs check "$ARCHIVE"
+    run 0k check "$ARCHIVE"
     assert_success
     assert_output --partial "MATCH"
     assert_output --partial "Matched:"
@@ -41,7 +41,7 @@ teardown() {
     # Change size to trigger metadata mismatch
     echo "longer content" > "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE"
+    run 0k check "$ARCHIVE"
     assert_success # Command succeeds, but reports mismatch
     assert_output --partial "MISMATCH"
     assert_output --partial "file1.txt"
@@ -50,7 +50,7 @@ teardown() {
 @test "Check: Detect missing files" {
     rm "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE"
+    run 0k check "$ARCHIVE"
     assert_success
     assert_output --partial "MISSING"
     assert_output --partial "file1.txt"
@@ -70,7 +70,7 @@ teardown() {
     # But usually mtime differs. 
     # Let's verify --use-cmp specifically catches content change:
     
-    run zks-rs check "$ARCHIVE" --use-cmp
+    run 0k check "$ARCHIVE" --use-cmp
     assert_success
     assert_output --partial "MISMATCH"
 }
@@ -79,7 +79,7 @@ teardown() {
     # Make local file newer
     touch -d "next hour" "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE" --delete
+    run 0k check "$ARCHIVE" --delete
     assert_success
     assert_output --partial "SKIPPED (Newer)"
     assert [ -f "$SRC/file1.txt" ]
@@ -91,7 +91,7 @@ teardown() {
     # Let's enforce local is OLDER to allow deletion (or same)
     touch -d "last hour" "$SRC/file1.txt"
     
-    run zks-rs check "$ARCHIVE" --delete
+    run 0k check "$ARCHIVE" --delete
     assert_success
     assert_output --partial "DELETED"
     assert [ ! -f "$SRC/file1.txt" ]

@@ -10,22 +10,22 @@ setup() {
     
     # Setup ZKS_BIN and RM_BIN
     if [ -z "$ZKS_BIN" ]; then
-        if [ -f "./target/debug/zks-rs" ]; then
-            export ZKS_BIN="./target/debug/zks-rs"
-        elif [ -f "../target/debug/zks-rs" ]; then
-            export ZKS_BIN="../target/debug/zks-rs"
+        if [ -f "./target/debug/0k" ]; then
+            export ZKS_BIN="./target/debug/0k"
+        elif [ -f "../target/debug/0k" ]; then
+            export ZKS_BIN="../target/debug/0k"
         else
-            export ZKS_BIN="$(git rev-parse --show-toplevel)/target/debug/zks-rs"
+            export ZKS_BIN="$(git rev-parse --show-toplevel)/target/debug/0k"
         fi
     fi
 
     # Derive RM_BIN from ZKS_BIN location if not set
     if [ -z "$RM_BIN" ]; then
         BIN_DIR=$(dirname "$ZKS_BIN")
-        export RM_BIN="$BIN_DIR/stazis-rm-if-empty"
+        export RM_BIN="$BIN_DIR/0k-safe-rm"
     fi
     
-    # Add directory of ZKS_BIN to PATH for squash_manager-rs
+    # Add directory of ZKS_BIN to PATH for 0k-core
     BIN_DIR=$(dirname "$ZKS_BIN")
     export PATH="$BIN_DIR:$PATH"
     
@@ -71,7 +71,7 @@ teardown() {
     assert_output --partial "list.yaml"
 }
 
-@test "Cleanup: stazis-rm-if-empty removes empty file" {
+@test "Cleanup: 0k-safe-rm removes empty file" {
     EMPTY="$TEST_DIR/empty_file"
     touch "$EMPTY"
     
@@ -80,7 +80,7 @@ teardown() {
     assert [ ! -f "$EMPTY" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty removes empty directory" {
+@test "Cleanup: 0k-safe-rm removes empty directory" {
     EMPTY_DIR="$TEST_DIR/empty_dir"
     mkdir "$EMPTY_DIR"
     
@@ -89,7 +89,7 @@ teardown() {
     assert [ ! -d "$EMPTY_DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES non-empty file" {
+@test "Cleanup: 0k-safe-rm FAILS and PRESERVES non-empty file" {
     NON_EMPTY="$TEST_DIR/data.txt"
     echo "data" > "$NON_EMPTY"
     
@@ -101,7 +101,7 @@ teardown() {
     assert [ -f "$NON_EMPTY" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty REMOVES directory with only empty files" {
+@test "Cleanup: 0k-safe-rm REMOVES directory with only empty files" {
     DIR="$TEST_DIR/dir_empty_files"
     mkdir "$DIR"
     touch "$DIR/file"
@@ -111,7 +111,7 @@ teardown() {
     assert [ ! -d "$DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES directory with non-empty file" {
+@test "Cleanup: 0k-safe-rm FAILS and PRESERVES directory with non-empty file" {
     DIR="$TEST_DIR/dir_data"
     mkdir "$DIR"
     echo "content" > "$DIR/file"
@@ -123,7 +123,7 @@ teardown() {
     assert_output --partial "non-empty"
 }
 
-@test "Cleanup: stazis-rm-if-empty REMOVES recursive (empty dir + empty file)" {
+@test "Cleanup: 0k-safe-rm REMOVES recursive (empty dir + empty file)" {
     DIR="$TEST_DIR/dir_recursive_empty"
     mkdir -p "$DIR/subdir"
     touch "$DIR/file"
@@ -133,7 +133,7 @@ teardown() {
     assert [ ! -d "$DIR" ]
 }
 
-@test "Cleanup: stazis-rm-if-empty FAILS and PRESERVES recursive (atomic check)" {
+@test "Cleanup: 0k-safe-rm FAILS and PRESERVES recursive (atomic check)" {
     DIR="$TEST_DIR/dir_recursive_data"
     mkdir -p "$DIR/subdir"
     echo "content" > "$DIR/file"

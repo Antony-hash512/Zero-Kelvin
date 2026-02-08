@@ -13,18 +13,18 @@ setup() {
     # Ensure ZKS_BIN is set; fallback to local debug build if not
     if [ -z "$ZKS_BIN" ]; then
         # Assume running from project root
-        if [ -f "./target/debug/zks-rs" ]; then
-            export ZKS_BIN="$(pwd)/target/debug/zks-rs"
-        elif [ -f "../target/debug/zks-rs" ]; then
-            export ZKS_BIN="$(readlink -f ../target/debug/zks-rs)"
+        if [ -f "./target/debug/0k" ]; then
+            export ZKS_BIN="$(pwd)/target/debug/0k"
+        elif [ -f "../target/debug/0k" ]; then
+            export ZKS_BIN="$(readlink -f ../target/debug/0k)"
         else
              # Try to locate
              ROOT_DIR="$(git rev-parse --show-toplevel)"
-             export ZKS_BIN="$ROOT_DIR/target/debug/zks-rs"
+             export ZKS_BIN="$ROOT_DIR/target/debug/0k"
         fi
     fi
 
-    # Add directory of ZKS_BIN to PATH so generated script can find squash_manager-rs
+    # Add directory of ZKS_BIN to PATH so generated script can find 0k-core
     BIN_DIR=$(dirname "$ZKS_BIN")
     export PATH="$BIN_DIR:$PATH"
 }

@@ -1,4 +1,4 @@
-# Security Audit Report: Zero-Kelvin-Stazis
+# Security Audit Report: Zero-Kelvin
 
 Date: 2026-02-06
 

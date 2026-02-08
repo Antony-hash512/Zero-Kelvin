@@ -12,13 +12,13 @@ setup() {
     
     # Ensure binary path
     if [ -z "$ZKS_BIN" ]; then
-        if [ -f "./target/debug/zks-rs" ]; then
-             export ZKS_BIN="./target/debug/zks-rs"
-        elif [ -f "../target/debug/zks-rs" ]; then
-             export ZKS_BIN="../target/debug/zks-rs"
+        if [ -f "./target/debug/0k" ]; then
+             export ZKS_BIN="./target/debug/0k"
+        elif [ -f "../target/debug/0k" ]; then
+             export ZKS_BIN="../target/debug/0k"
         else
              # Fallback: assume in PATH or just fail later
-             export ZKS_BIN="zks-rs"
+             export ZKS_BIN="0k"
         fi
     fi
 

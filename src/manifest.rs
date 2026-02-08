@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use serde::de::Error as SerdeError; // Import trait for .custom()
-use crate::error::ZksError;
+use crate::error::ZkError;
 use std::fs;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -36,19 +36,19 @@ pub struct FileEntry {
 }
 
 impl FileEntry {
-    pub fn from_path(id: u32, path: &Path, follow_links: bool) -> Result<Self, ZksError> {
+    pub fn from_path(id: u32, path: &Path, follow_links: bool) -> Result<Self, ZkError> {
         // Make path absolute without resolving symlinks (canonicalize would resolve them)
         let abs_path = if path.is_relative() {
-            std::env::current_dir().map_err(ZksError::IoError)?.join(path)
+            std::env::current_dir().map_err(ZkError::IoError)?.join(path)
         } else {
             path.to_path_buf()
         };
 
         // Use symlink_metadata to detect symlinks (don't follow them yet)
         let metadata = if follow_links {
-            fs::metadata(&abs_path).map_err(ZksError::IoError)?
+            fs::metadata(&abs_path).map_err(ZkError::IoError)?
         } else {
-            fs::symlink_metadata(&abs_path).map_err(ZksError::IoError)?
+            fs::symlink_metadata(&abs_path).map_err(ZkError::IoError)?
         };
 
         let entry_type = if metadata.is_symlink() {
@@ -60,12 +60,12 @@ impl FileEntry {
         };
 
         let name = abs_path.file_name()
-            .ok_or_else(|| ZksError::InvalidPath(path.to_path_buf()))?
+            .ok_or_else(|| ZkError::InvalidPath(path.to_path_buf()))?
             .to_string_lossy()
             .into_owned();
 
         let restore_path = abs_path.parent()
-            .ok_or_else(|| ZksError::InvalidPath(path.to_path_buf()))?
+            .ok_or_else(|| ZkError::InvalidPath(path.to_path_buf()))?
             .to_string_lossy()
             .into_owned();
 
@@ -78,22 +78,22 @@ impl FileEntry {
         })
     }
 
-    pub fn validate(&self) -> Result<(), ZksError> {
+    pub fn validate(&self) -> Result<(), ZkError> {
         if let Some(name) = &self.name {
             if name.contains("..") || name.contains('/') {
-                return Err(ZksError::ManifestError(serde_yaml::Error::custom(format!("Invalid name contains '..' or '/': {}", name))));
+                return Err(ZkError::ManifestError(serde_yaml::Error::custom(format!("Invalid name contains '..' or '/': {}", name))));
             }
         }
 
         if let Some(path) = &self.restore_path {
             if path.split('/').any(|part| part == "..") {
-                 return Err(ZksError::ManifestError(serde_yaml::Error::custom(format!("Invalid restore_path contains '..': {}", path))));
+                 return Err(ZkError::ManifestError(serde_yaml::Error::custom(format!("Invalid restore_path contains '..': {}", path))));
             }
         }
 
         if let Some(path) = &self.original_path {
             if path.split('/').any(|part| part == "..") {
-                 return Err(ZksError::ManifestError(serde_yaml::Error::custom(format!("Invalid original_path contains '..': {}", path))));
+                 return Err(ZkError::ManifestError(serde_yaml::Error::custom(format!("Invalid original_path contains '..': {}", path))));
             }
         }
         
@@ -142,10 +142,10 @@ impl Manifest {
         }
     }
 
-    pub fn validate(&self) -> Result<(), ZksError> {
+    pub fn validate(&self) -> Result<(), ZkError> {
         use serde::de::Error;
         for entry in &self.files {
-            entry.validate().map_err(|_| ZksError::ManifestError(serde_yaml::Error::custom(format!("Validation failed for file ID {}", entry.id))))?;
+            entry.validate().map_err(|_| ZkError::ManifestError(serde_yaml::Error::custom(format!("Validation failed for file ID {}", entry.id))))?;
         }
         Ok(())
     }

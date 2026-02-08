@@ -11,8 +11,8 @@ setup() {
     if [ -z "$ZKS_BIN" ]; then
         SCRIPT_DIR="$(cd "$(dirname "$BATS_TEST_FILENAME")" && pwd)"
         ZKS_PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-        ZKS_SQM_BIN="$ZKS_PROJECT_ROOT/target/debug/squash_manager-rs"
-        ZKS_BIN="$ZKS_PROJECT_ROOT/target/debug/zks-rs"
+        ZKS_SQM_BIN="$ZKS_PROJECT_ROOT/target/debug/0k-core"
+        ZKS_BIN="$ZKS_PROJECT_ROOT/target/debug/0k"
         export ZKS_SQM_BIN ZKS_BIN ZKS_PROJECT_ROOT
     fi
 

@@ -1,5 +1,5 @@
 # Maintainer: Antony-hash512
-pkgname=zks-rs-local-git
+pkgname=zero-kelvin-testing
 pkgver=$(grep '^version =' ../Cargo.toml | cut -d '"' -f 2)
 pkgrel=1
 pkgdesc="Cold storage backup utility (Rust port)"
@@ -8,8 +8,8 @@ url="https://github.com/Antony-hash512/Zero-Kelvin-Stazis"
 license=('GPL3')
 depends=('glibc' 'gcc-libs' 'squashfs-tools' 'squashfs-tools-ng' 'cryptsetup' 'squashfuse' 'rclone' 'util-linux')
 makedepends=('cargo' 'git' 'fish' 'bats' 'just') # Добавил тестовые зависимости
-provides=('zero-kelvin-stazis' 'zks-rs' 'squash_manager-rs' 'stazis-rm-if-empty')
-conflicts=('zero-kelvin-stazis')
+provides=('zero-kelvin' '0k' '0k-core' '0k-safe-rm')
+conflicts=('zero-kelvin')
 
 # Абсолютный путь к корню проекта (вычисляется при парсинге PKGBUILD)
 # Нужен, чтобы избежать конфликта имён: папка src проекта vs папка src от makepkg
@@ -60,9 +60,12 @@ check() {
 
 package() {
     cd "$srcdir/$pkgname"
-    install -Dm755 target/release/squash_manager-rs "$pkgdir/usr/bin/squash_manager-rs"
-    install -Dm755 target/release/zks-rs "$pkgdir/usr/bin/zks-rs"
-    install -Dm755 target/release/stazis-rm-if-empty "$pkgdir/usr/bin/stazis-rm-if-empty"
+    install -Dm755 target/release/0k-core "$pkgdir/usr/bin/0k-core"
+    install -Dm755 target/release/0k "$pkgdir/usr/bin/0k"
+    install -Dm755 target/release/0k-safe-rm "$pkgdir/usr/bin/0k-safe-rm"
+    
+    # Create alias symlink
+    ln -s 0k "$pkgdir/usr/bin/zero-kelvin"
 
     # Установка лицензии и документации
     install -Dm644 LICENSE.GPLv3 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.GPLv3"

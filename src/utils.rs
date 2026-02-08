@@ -1,4 +1,4 @@
-use crate::error::ZksError;
+use crate::error::ZkError;
 use log::warn;
 use std::fs;
 use std::path::Path;
@@ -16,15 +16,15 @@ pub enum ArchiveType {
     Unknown,
 }
 
-pub fn get_file_type(path: &Path) -> Result<ArchiveType, ZksError> {
+pub fn get_file_type(path: &Path) -> Result<ArchiveType, ZkError> {
     if !path.exists() {
-        return Err(ZksError::InvalidPath(path.to_path_buf()));
+        return Err(ZkError::InvalidPath(path.to_path_buf()));
     }
     
     // Check using infer (magic numbers)
     // We read the first few bytes
     let kind = infer::get_from_path(path)
-        .map_err(|e| ZksError::IoError(e))?;
+        .map_err(|e| ZkError::IoError(e))?;
         
     match kind {
         Some(k) => {
@@ -56,12 +56,12 @@ pub fn get_file_type(path: &Path) -> Result<ArchiveType, ZksError> {
 
 // Stub implementation for TDD phase
 
-pub fn get_current_uid() -> Result<u32, ZksError> {
-    let content = fs::read_to_string("/proc/self/status").map_err(ZksError::IoError)?;
+pub fn get_current_uid() -> Result<u32, ZkError> {
+    let content = fs::read_to_string("/proc/self/status").map_err(ZkError::IoError)?;
     parse_uid_from_status(&content)
 }
 
-pub fn is_root() -> Result<bool, ZksError> {
+pub fn is_root() -> Result<bool, ZkError> {
     let euid = get_current_uid()?;
     Ok(euid == 0)
 }
@@ -76,7 +76,7 @@ pub fn get_superuser_command() -> Option<String> {
     None
 }
 
-pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError> {
+pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZkError> {
     if is_root()? {
         return Ok(None);
     }
@@ -89,15 +89,15 @@ pub fn check_root_or_get_runner(reason: &str) -> Result<Option<String>, ZksError
         return Ok(Some(runner));
     }
 
-    Err(ZksError::OperationFailed(
+    Err(ZkError::OperationFailed(
         "Root privileges required but no elevation tool (sudo, doas, etc.) found.".to_string(),
     ))
 }
 
-pub fn is_permission_denied(err: &ZksError) -> bool {
+pub fn is_permission_denied(err: &ZkError) -> bool {
     match err {
-        ZksError::IoError(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
-        ZksError::OperationFailed(msg) => {
+        ZkError::IoError(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
+        ZkError::OperationFailed(msg) => {
             let msg_lower = msg.to_lowercase();
             msg_lower.contains("permission denied")
                 || msg_lower.contains("operation not permitted")
@@ -109,7 +109,7 @@ pub fn is_permission_denied(err: &ZksError) -> bool {
     }
 }
 
-pub fn re_exec_with_runner(runner: &str) -> Result<(), ZksError> {
+pub fn re_exec_with_runner(runner: &str) -> Result<(), ZkError> {
     use std::os::unix::process::CommandExt;
 
     let args: Vec<String> = std::env::args().collect();
@@ -127,14 +127,14 @@ pub fn re_exec_with_runner(runner: &str) -> Result<(), ZksError> {
         .exec();
 
     // exec replaces the process, so we only return if it fails
-    Err(ZksError::OperationFailed(format!(
+    Err(ZkError::OperationFailed(format!(
         "Failed to re-execute with {}: {}",
         runner, err
     )))
 }
 
 // Helpers for testing (not exposed)
-fn parse_uid_from_status(content: &str) -> Result<u32, ZksError> {
+fn parse_uid_from_status(content: &str) -> Result<u32, ZkError> {
     for line in content.lines() {
         if line.starts_with("Uid:") {
             // Format: Uid: Puid Euid Suid Fsuid
@@ -144,11 +144,11 @@ fn parse_uid_from_status(content: &str) -> Result<u32, ZksError> {
             if parts.len() >= 3 {
                 return parts[2]
                     .parse()
-                    .map_err(|e| ZksError::OperationFailed(format!("Failed to parse UID: {}", e)));
+                    .map_err(|e| ZkError::OperationFailed(format!("Failed to parse UID: {}", e)));
             }
         }
     }
-    Err(ZksError::OperationFailed(
+    Err(ZkError::OperationFailed(
         "Uid field not found in status".to_string(),
     ))
 }
@@ -229,55 +229,55 @@ mod tests {
 
 use std::path::PathBuf;
 
-pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool, ZksError> {
+pub fn check_read_permissions(paths: &[PathBuf]) -> Result<bool, ZkError> {
     for path in paths {
         // If path doesn't exist, we can't read it. But usually this should be checked before.
         // If it doesn't exist, returning error or false?
         // Logic: "analyze permissions to targets". If target missing, freeze should fail.
         // Return error if missing.
 
-        let metadata = fs::metadata(path).map_err(|_| ZksError::InvalidPath(path.clone()))?;
+        let metadata = fs::metadata(path).map_err(|_| ZkError::InvalidPath(path.clone()))?;
 
         if metadata.is_dir() {
             if let Err(e) = fs::read_dir(path) {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
                     return Ok(false);
                 }
-                return Err(ZksError::IoError(e));
+                return Err(ZkError::IoError(e));
             }
         } else {
             if let Err(e) = fs::File::open(path) {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
                     return Ok(false);
                 }
-                return Err(ZksError::IoError(e));
+                return Err(ZkError::IoError(e));
             }
         }
     }
     Ok(true)
 }
 
-pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZksError> {
+pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZkError> {
     if !check_read_permissions(paths)? {
-        return Err(ZksError::OperationFailed(
+        return Err(ZkError::OperationFailed(
             "Insufficient read permissions for one or more freeze targets".to_string(),
         ));
     }
     Ok(())
 }
 
-/// Returns the path to /tmp/stazis-<uid> without ensuring it exists.
-pub fn get_stazis_temp_dir_path() -> Result<PathBuf, ZksError> {
+/// Returns the path to /tmp/0k-cache-<uid> without ensuring it exists.
+pub fn get_0k_temp_dir_path() -> Result<PathBuf, ZkError> {
     let uid = get_current_uid()?;
-    Ok(PathBuf::from(format!("/tmp/stazis-{}", uid)))
+    Ok(PathBuf::from(format!("/tmp/0k-cache-{}", uid)))
 }
 
-/// Returns the path to /tmp/stazis-<uid> and ensures it exists with 0700 permissions.
+/// Returns the path to /tmp/0k-cache-<uid> and ensures it exists with 0700 permissions.
 /// Uses atomic mkdir + ownership verification to prevent symlink attacks (TOCTOU).
-pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
+pub fn get_0k_temp_dir() -> Result<PathBuf, ZkError> {
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::fs::PermissionsExt;
-    let path = get_stazis_temp_dir_path()?;
+    let path = get_0k_temp_dir_path()?;
     let uid = get_current_uid()?;
 
     // Attempt atomic create (not create_dir_all — that follows symlinks).
@@ -285,32 +285,32 @@ pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
         Ok(()) => {
             // We just created it — set permissions.
             let mut perms = fs::metadata(&path)
-                .map_err(ZksError::IoError)?
+                .map_err(ZkError::IoError)?
                 .permissions();
             perms.set_mode(0o700);
-            fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
+            fs::set_permissions(&path, perms).map_err(ZkError::IoError)?;
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Directory already exists — verify it's safe to use:
             // 1. Must be a real directory (not a symlink)
             // 2. Must be owned by us
             // 3. Must have 0700 permissions
-            let meta = fs::symlink_metadata(&path).map_err(ZksError::IoError)?;
+            let meta = fs::symlink_metadata(&path).map_err(ZkError::IoError)?;
 
             if meta.file_type().is_symlink() {
-                return Err(ZksError::StagingError(format!(
+                return Err(ZkError::StagingError(format!(
                     "Security: {:?} is a symlink (possible attack). Refusing to use.",
                     path
                 )));
             }
             if !meta.is_dir() {
-                return Err(ZksError::StagingError(format!(
+                return Err(ZkError::StagingError(format!(
                     "Security: {:?} exists but is not a directory.",
                     path
                 )));
             }
             if meta.uid() != uid {
-                return Err(ZksError::StagingError(format!(
+                return Err(ZkError::StagingError(format!(
                     "Security: {:?} is owned by uid {} but we are uid {}. Refusing to use.",
                     path,
                     meta.uid(),
@@ -322,10 +322,10 @@ pub fn get_stazis_temp_dir() -> Result<PathBuf, ZksError> {
             let mut perms = meta.permissions();
             if perms.mode() & 0o777 != 0o700 {
                 perms.set_mode(0o700);
-                fs::set_permissions(&path, perms).map_err(ZksError::IoError)?;
+                fs::set_permissions(&path, perms).map_err(ZkError::IoError)?;
             }
         }
-        Err(e) => return Err(ZksError::IoError(e)),
+        Err(e) => return Err(ZkError::IoError(e)),
     }
 
     Ok(path)

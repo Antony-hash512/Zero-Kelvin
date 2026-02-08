@@ -32,7 +32,7 @@ setup() {
 @test "Help: Create command missing args (Show specific help)" {
     run $ZKS_SQM_BIN create
     assert_failure
-    assert_output --partial "Usage: squash_manager-rs create"
+    assert_output --partial "Usage: 0k-core create"
     assert_output --partial "Arguments:"
     assert_output --partial "<INPUT>"
 }

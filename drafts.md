@@ -115,7 +115,7 @@ User Mode: Verify all files are owned by the current user in the archive (squash
 
 ### Надо сделать, когда будем реализовывать очистку
 #### E. Staging Area Cleanup
-Cleanup Success: Verify that the temporary build directory in $XDG_CACHE_HOME/zero-kelvin-stazis/build_* is removed after a successful freeze.
+Cleanup Success: Verify that the temporary build directory in $XDG_CACHE_HOME/zero-kelvin/build_* is removed after a successful freeze.
 Cleanup Failure: Verify that if mksquashfs fails (e.g., disk full mock), the staging directory is still cleaned up (or preserved for debugging if that's the policy).
 
 ## Предварительный план логгирования
@@ -129,7 +129,7 @@ Audit/Debug: Detailed logs in a persistent file with automatic rotation.
 User Review Required
 IMPORTANT
 
-Logs will be stored in ~/.local/state/zero-kelvin-stazis/logs/ by default (following XDG specs).
+Logs will be stored in ~/.local/state/zero-kelvin/logs/ by default (following XDG specs).
 
 Proposed Changes
 [MODIFY] 
@@ -148,9 +148,9 @@ Set up a tracing_subscriber with two layers:
 Format Layer: Writes "Pretty" output to stderr.
 File Layer: Writes JSON or detailed text to the rotating log file.
 [MODIFY] 
-src/bin/zks-rs.rs
+src/bin/0k.rs
  / 
-src/bin/squash_manager-rs.rs
+src/bin/0k-core.rs
 Call logger::init_logger()? at the very start of 
 main()
 .

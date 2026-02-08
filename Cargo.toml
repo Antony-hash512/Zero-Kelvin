@@ -1,28 +1,29 @@
 [package]
-name = "zero-kelvin-stazis"
-version = "0.2.3"
+name = "zero-kelvin-testing"
+version = "0.2.4"
 edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
 # --- Определение Библиотеки (Общий код) ---
-# Имя библиотеки будет derived из [package] name: zero_kelvin_stazis
-# В коде бинарников ты будешь использовать: use zero_kelvin_stazis::engine;
+# Имя библиотеки будет derived из [package] name: zero_kelvin_testing
+# В коде бинарников ты будешь использовать: use zero_kelvin_testing::engine;
 [lib]
+name = "zero_kelvin"
 path = "src/lib.rs"
 
 # --- Определение Бинарников (Точки входа) ---
 
 [[bin]]
-name = "zks-rs"
-path = "src/bin/zks-rs.rs"
+name = "0k"
+path = "src/bin/0k.rs"
 
 [[bin]]
-name = "squash_manager-rs"
-path = "src/bin/squash_manager-rs.rs"
+name = "0k-core"
+path = "src/bin/0k-core.rs"
 
 [[bin]]
-name = "stazis-rm-if-empty"
-path = "src/bin/stazis-rm-if-empty.rs"
+name = "0k-safe-rm"
+path = "src/bin/0k-safe-rm.rs"
 
 [dependencies]
 # 1. Парсинг аргументов (замена argparse в fish)
@@ -72,8 +73,8 @@ libc = "0.2.180"
 [dev-dependencies]
 # Инструменты для ТЕСТОВ
 ## Для unit-тестов
-mockall = "0.14.0" 
+mockall = "0.14.0"
 
-## Для интеграционных тестов сейчас используем сабмодули bats 
+## Для интеграционных тестов сейчас используем сабмодули bats
 # assert_cmd = "2.1"  # Позволяет запускать бинарник как процесс и проверять вывод
 # predicates = "3.1"  # Помогает сравнивать строки/файлы в тестах

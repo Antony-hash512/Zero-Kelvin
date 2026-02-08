@@ -11,20 +11,20 @@ setup() {
     echo "content2" > "$SRC/dir/file2.txt"
     
     if [ -z "$ZKS_BIN" ]; then
-        if [ -f "./target/debug/zks-rs" ]; then
-            export ZKS_BIN="./target/debug/zks-rs"
-        elif [ -f "../target/debug/zks-rs" ]; then
-            export ZKS_BIN="../target/debug/zks-rs"
+        if [ -f "./target/debug/0k" ]; then
+            export ZKS_BIN="./target/debug/0k"
+        elif [ -f "../target/debug/0k" ]; then
+            export ZKS_BIN="../target/debug/0k"
         else
             echo "ZKS_BIN not set and not found"
             exit 1
         fi
     fi
     
-    # We also need squash_manager-rs in PATH for zks-rs to work
+    # We also need 0k-core in PATH for 0k to work
     # Build dir usually adds to path? Or assume installed?
     # Tests run via Justfile usually setup PATH.
-    # If running manually, we might fail if squash_manager-rs is not found.
+    # If running manually, we might fail if 0k-core is not found.
     export PATH="$(dirname "$ZKS_BIN"):$PATH"
 }
 

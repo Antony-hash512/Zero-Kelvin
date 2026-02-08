@@ -2,8 +2,8 @@
 set -e
 
 # Path to binaries (Absolute)
-ZKS="$(pwd)/target/debug/zks-rs"
-SQM="$(pwd)/target/debug/squash_manager-rs"
+ZKS="$(pwd)/target/debug/0k"
+SQM="$(pwd)/target/debug/0k-core"
 
 # Ensure binaries are in PATH for unshare
 export PATH="$(pwd)/target/debug:$PATH"

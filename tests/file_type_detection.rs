@@ -1,4 +1,4 @@
-use zero_kelvin_stazis::utils;
+use zero_kelvin::utils;
 use std::fs;
 
 #[test]

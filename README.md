@@ -9,7 +9,7 @@
 
 ## English
 
-- **Zero-Kelvin Stazis (zks-rs)** is a high-performance utility for data "conservation" that ensures full preservation of integrity, file attributes (permissions, ownership, timestamps), hierarchy, and location relative to the filesystem root.
+- **Zero-Kelvin Stazis (0k)** is a high-performance utility for data "conservation" that ensures full preservation of integrity, file attributes (permissions, ownership, timestamps), hierarchy, and location relative to the filesystem root.
 A Rust port of the `zero-kelvin-store` function set (originally written for Fish shell), the utility packs projects into compressed, mountable **SquashFS** images. It supports optional transparent encryption via standard **LUKS** (`cryptsetup`).
 - **Primary Goal:** To free up disk space while maintaining instant read-only access without the need for decompression, with the ability to extract individual files or the entire archive.
 
@@ -44,7 +44,7 @@ A: The purpose of this utility is to "freeze" and move data that is not currentl
   - If your file system (e.g., ext4) does not support snapshots, or you need not only deduplication of different versions but also the ability to free up space, use ready-made backup solutions such as Borg, Restic, Kopia. These utilities are better suited for use as a "time machine."
 
 Q: Why do I need this utility if Borg, Restic, Kopia exist?
-A: The advantage of this utility over these solutions is: One file versus a folder with small files. Borg/Restic create repositories of thousands of small files (chunks). Moving them (copying to/from external storage/network storage) is more difficult than moving one monolithic .sqfs image file: not a bunch of small files in a complex database, but 1 autonomous, portable, self-sufficient file. The SquashFS format is a Linux standard: to restore or view data, you do not need the `zks-rs` utility itself; standard system tools are sufficient (the utility simply makes it easier and faster). The image mounts instantly, without long indexing. To open a Borg or Restic repository in 10 years, you absolutely need the `borg` or `restic` program installed (and if their format suddenly changes, then "we're in trouble..."). To open a SquashFS archive, you just need Linux (the format is supported by the kernel).
+A: The advantage of this utility over these solutions is: One file versus a folder with small files. Borg/Restic create repositories of thousands of small files (chunks). Moving them (copying to/from external storage/network storage) is more difficult than moving one monolithic .sqfs image file: not a bunch of small files in a complex database, but 1 autonomous, portable, self-sufficient file. The SquashFS format is a Linux standard: to restore or view data, you do not need the `0k` utility itself; standard system tools are sufficient (the utility simply makes it easier and faster). The image mounts instantly, without long indexing. To open a Borg or Restic repository in 10 years, you absolutely need the `borg` or `restic` program installed (and if their format suddenly changes, then "we're in trouble..."). To open a SquashFS archive, you just need Linux (the format is supported by the kernel).
 
 ---
 
@@ -57,8 +57,8 @@ cargo build --release
 ```
 
 The build produces two main binaries:
-- `zks-rs`: The primary high-level orchestrator.
-- `squash_manager-rs`: Low-level tool for SquashFS and LUKS management.
+- `0k`: The primary high-level orchestrator.
+- `0k-core`: Low-level tool for SquashFS and LUKS management.
 
 ---
 
@@ -69,20 +69,20 @@ Move logically grouped paths into a "frozen" state.
 
 ```bash
 # Basic freeze
-zks-rs freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
+0k freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
 
 # Encrypted freeze
-zks-rs freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
+0k freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
 
 # Freeze multiple targets
-zks-rs freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
+0k freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
 ```
 
 #### Unfreeze (Restore)
 Return data to its original location instantly.
 
 ```bash
-zks-rs unfreeze /mnt/nas/archives/old-work.sqfs
+0k unfreeze /mnt/nas/archives/old-work.sqfs
 ```
 
 #### Check (Verify)
@@ -90,10 +90,10 @@ Compare an archive against the live system.
 
 ```bash
 # Verify integrity
-zks-rs check /mnt/nas/archives/old-work.sqfs
+0k check /mnt/nas/archives/old-work.sqfs
 
 # Verify and safely delete local files that match the archive (Offloading)
-zks-rs check --delete /mnt/nas/archives/old-work.sqfs
+0k check --delete /mnt/nas/archives/old-work.sqfs
 ```
 
 ---
@@ -118,7 +118,7 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 ### 🧊 Zero-Kelvin Stazis (Rust)
 
 
-- **Zero-Kelvin Stazis (zks-rs)** — это высокопроизводительная утилита для «консервации» данных с полным сохранением их целостности, атрибутов (прав доступа, владельцев, временных меток), иерархии и распольожения относительно корня файловой системы.
+- **Zero-Kelvin Stazis (0k)** — это высокопроизводительная утилита для «консервации» данных с полным сохранением их целостности, атрибутов (прав доступа, владельцев, временных меток), иерархии и распольожения относительно корня файловой системы.
 Являясь портом на Rust набора функций `zero-kelvin-store` (изначально написанных для Fish shell), утилита упаковывает проекты в сжатые, монтируемые образы **SquashFS**. Поддерживается опциональное прозрачное шифрование через стандартный **LUKS** (`cryptsetup`).
 - **Главная цель**: освобождение дискового пространства при сохранении мгновенного доступа к данным без необходимости распаковки (read-only) и возможностью распакавать к любые файлы как по отдельности так и весь архив целиком.
 
@@ -163,8 +163,8 @@ cargo build --release
 ```
 
 В результате сборки создаются два основных бинарных файла:
-- `zks-rs`: Основной высокоуровневый оркестратор.
-- `squash_manager-rs`: Низкоуровневый инструмент для управления SquashFS и LUKS.
+- `0k`: Основной высокоуровневый оркестратор.
+- `0k-core`: Низкоуровневый инструмент для управления SquashFS и LUKS.
 
 ---
 
@@ -175,20 +175,20 @@ cargo build --release
 
 ```bash
 # Базовая заморозка
-zks-rs freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
+0k freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
 
 # Шифрованная заморозка
-zks-rs freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
+0k freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
 
 # Заморозка нескольких целей
-zks-rs freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
+0k freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
 ```
 
 #### Unfreeze (Разморозка/Восстановление)
 Мгновенный возврат данных на их исходные места.
 
 ```bash
-zks-rs unfreeze /mnt/nas/archives/old-work.sqfs
+0k unfreeze /mnt/nas/archives/old-work.sqfs
 ```
 
 #### Check (Проверка)
@@ -196,10 +196,10 @@ zks-rs unfreeze /mnt/nas/archives/old-work.sqfs
 
 ```bash
 # Проверка целостности
-zks-rs check /mnt/nas/archives/old-work.sqfs
+0k check /mnt/nas/archives/old-work.sqfs
 
 # Проверка и безопасное удаление локальных файлов, совпадающих с архивом (Offloading)
-zks-rs check --delete /mnt/nas/archives/old-work.sqfs
+0k check --delete /mnt/nas/archives/old-work.sqfs
 ```
 
 ---

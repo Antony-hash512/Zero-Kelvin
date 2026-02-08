@@ -27,7 +27,7 @@ EOF
     
     # Ensure zks is built
     if [ -z "$ZKS_BIN" ]; then
-        export ZKS_BIN="./target/debug/zks-rs"
+        export ZKS_BIN="./target/debug/0k"
     fi
 }
 

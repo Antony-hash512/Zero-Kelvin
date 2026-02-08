@@ -21,8 +21,10 @@ fmt-check:
 # Быстрая установка бинарников (для отладки)
 install-local:
     cargo build --release
-    sudo install -Dm755 target/release/squash_manager-rs /usr/bin/squash_manager-rs
-    sudo install -Dm755 target/release/zks-rs /usr/bin/zks-rs
+    sudo install -Dm755 target/release/0k-core /usr/bin/0k-core
+    sudo install -Dm755 target/release/0k /usr/bin/0k
+    sudo install -Dm755 target/release/0k-safe-rm /usr/bin/0k-safe-rm
+    sudo ln -sf 0k /usr/bin/zero-kelvin
 
 # Собрать Arch Linux пакет (с bump версии)
 pkg:
@@ -40,6 +42,12 @@ pkg-install:
 # Очистка артефактов сборки пакета
 pkg-clean:
     cd local_pkg && rm -rf pkg src *.pkg.tar.zst
+
+# Глобальная очистка (Cargo + временные файлы тестов)
+clean-all: 
+    just pkg-clean
+    cargo clean
+
 
 # Обновление версии и проверка зависимостей без сборки пакета
 bump:

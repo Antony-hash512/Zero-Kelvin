@@ -2,7 +2,7 @@ use thiserror::Error;
 use std::path::PathBuf;
 
 #[derive(Error, Debug)]
-pub enum ZksError {
+pub enum ZkError {
     #[error("Manifest error: {0}")]
     ManifestError(#[from] serde_yaml::Error),
 
@@ -31,10 +31,10 @@ pub enum ZksError {
     MissingTarget(String),
 }
 
-impl ZksError {
+impl ZkError {
     pub fn friendly_message(&self) -> Option<String> {
         match self {
-            ZksError::IoError(e) => {
+            ZkError::IoError(e) => {
                 // ENOSPC (28) -> No space left on device
                 if let Some(code) = e.raw_os_error() {
                     if code == 28 {
@@ -43,7 +43,7 @@ impl ZksError {
                 }
                 None
             },
-            ZksError::LuksError(msg) | ZksError::OperationFailed(msg) => {
+            ZkError::LuksError(msg) | ZkError::OperationFailed(msg) => {
                 // Common cryptsetup/luks errors
                 // Note: cryptsetup usually prints to stderr, but if we captured it in msg:
                 if msg.to_lowercase().contains("no key available with this passphrase") {

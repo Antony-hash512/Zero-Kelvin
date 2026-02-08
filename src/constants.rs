@@ -2,8 +2,9 @@
 pub const DEFAULT_ZSTD_COMPRESSION: u32 = 19;
 
 /// Application name for directory naming (XDG_CACHE_HOME, etc.)
-pub const APP_NAME: &str = "zero-kelvin-stazis";
-pub const APP_NAME_FOR_CACHE: &str = "stazis";
+pub const APP_NAME: &str = "0k";
+pub const APP_NAME_FOR_CONFIG: &str = "0k";
+pub const APP_NAME_FOR_CACHE: &str = "0k-cache";
 
 /// Size of the LUKS2 header in bytes
 pub const LUKS_HEADER_SIZE: u64 = 32 * 1024 * 1024; // 32MB for LUKS2 header

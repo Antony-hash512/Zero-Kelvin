@@ -45,12 +45,16 @@ set -l script_dir (dirname (status filename))
 set -x ZKS_PROJECT_ROOT (realpath $script_dir/..)
 
 # Сразу вычисляем путь к бинарнику, чтобы не дублировать логику в bats
-set -x ZKS_SQM_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/squash_manager-rs"
-set -x ZKS_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/zks-rs"
+set -x ZKS_SQM_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/0k-core"
+set -x ZKS_BIN "$ZKS_PROJECT_ROOT/target/$TEST_TARGET/0k"
 
 echo "Project Root: $ZKS_PROJECT_ROOT"
 echo "Binary Path:  $ZKS_BIN"
 echo "Binary Path:  $ZKS_SQM_BIN"
+
+# Add binary directory to PATH for tests
+# This is crucial because '0k' generates scripts calling '0k-core' (without path)
+set -x PATH "$ZKS_PROJECT_ROOT/target/$TEST_TARGET" $PATH
 
 # --- ШАГ 2: Сборка ---
 set -l build_choice
@@ -100,7 +104,7 @@ run_colored_bats tests/00_help.bats
 and run_colored_bats tests/01_create.bats
 
 # Тест 2
-# Sudo больше не нужен т.к. под капотом squash_manager-rs должен использоваться squashfuse
+# Sudo больше не нужен т.к. под капотом 0k-core должен использоваться squashfuse
 # вместо системных утилит mount/umount, в отличие от них он не требует root прав
 and run_colored_bats tests/02_mount.bats
 
