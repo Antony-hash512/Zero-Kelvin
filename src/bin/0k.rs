@@ -6,21 +6,23 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "0k",
     about = "Zero Kelvin - Cold Storage Utility",
-    version
+    long_version = concat!("\rZero Kelvin Offload Tool\na.k.a. `0k` ", env!("CARGO_PKG_VERSION"))
 )]
 pub struct Args {
     #[command(subcommand)]
     pub command: Commands,
 }
 
-const BANNER: &str = r#"
+const BANNER: &str = concat!(
+    r#"
 Copyleft 🄯 2026 :: GPL3
 github.com/Antony-hash512/Zero-Kelvin-Stazis
-   __  __
-  /  \|  |/  Zero Kelvin Offload Tool v0.2
- |  0 |  K   [ Freeze your data. Free your space. ]
-  \__/|__|\  Blazed by Rust
-"#;
+   __  __  _
+  /  \|  |/ /  Zero Kelvin Offload Tool v"#,env!("CARGO_PKG_VERSION"),r#"
+ │ 0  │  K  │  [ Freeze your data. Free your space. ]
+  \__/|__|\_\  Blazed by Rust
+"#
+);
 
 impl Args {
     pub fn build_command() -> clap::Command {
