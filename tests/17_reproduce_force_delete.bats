@@ -36,21 +36,37 @@ teardown() {
     assert_success
     assert_output --partial "SKIPPED (Newer)"
     assert_output --partial "Hint:"
-    assert_output --partial "Use --force-delete"
+    assert_output --partial "--force-delete"
+    assert_output --partial "-D"
     
     # File should still exist
     assert [ -f "$SRC/file1.txt" ]
 }
 
-@test "Force Delete: Fail without --delete (Modifier check)" {
+@test "Force Delete: Fail without --delete" {
     touch -d "next hour" "$SRC/file1.txt"
-    run 0k check "$ARCHIVE" --force-delete
+    run 0k check "$ARCHIVE" -D
     assert_failure
+    # Clap error message for requires:
     assert_output --partial "the following required arguments were not provided"
     assert_output --partial "--delete"
 }
 
-@test "Force Delete: Successfully delete newer file" {
+@test "Force Delete: Success with -D" {
+    # Make local file newer
+    touch -d "next hour" "$SRC/file1.txt"
+    
+    # Run check --delete -D
+    run 0k check "$ARCHIVE" --delete -D
+    assert_success
+    assert_output --partial "DELETED"
+    refute_output --partial "SKIPPED (Newer)"
+    
+    # File should be gone
+    assert [ ! -f "$SRC/file1.txt" ]
+}
+
+@test "Force Delete: Success with --force-delete" {
     # Make local file newer
     touch -d "next hour" "$SRC/file1.txt"
     

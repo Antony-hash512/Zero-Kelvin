@@ -379,7 +379,10 @@ pub fn check<E: CommandExecutor>(
     );
 
     if stats_skipped > 0 && options.delete && !options.force_delete {
-        println!("\nHint: {} file(s) were skipped because they are newer than the archive.\n      Use --force-delete along with --delete to delete them anyway (ignoring mtime).", stats_skipped);
+        println!(
+            "\nHint: {} file(s) were skipped because they are newer than the archive.\n   To delete them anyway (ignoring mtime) use -D/--force-delete along with --delete: \n 0k --delete -D <offload_file> \n zero-kelvin --delete --force-delete <offload_file>",
+            stats_skipped
+        );
     }
 
     Ok(())

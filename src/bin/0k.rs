@@ -56,7 +56,7 @@ impl Args {
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
       --delete              Delete local files if they match the archive (Destructive!).
-      --force-delete        Modifier for --delete: also delete files newer than archive.
+      -D, --force-delete    Modifier for --delete: also delete files newer than archive.
                             (Useful for cleaning up already restored/unfrozen files).
 ",
             BANNER, DEFAULT_ZSTD_COMPRESSION
@@ -157,7 +157,7 @@ pub enum Commands {
         /// Force delete even if local file is newer (ignoring mtime).
         /// This is a modifier for --delete. Useful if you want to clean up
         /// files that were already restored (unfrozen) as they often have newer mtime.
-        #[arg(long, requires = "delete")]
+        #[arg(short = 'D', long, requires = "delete")]
         force_delete: bool,
     },
 }
