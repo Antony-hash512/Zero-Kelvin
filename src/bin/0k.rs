@@ -19,7 +19,7 @@ Copyleft 🄯 2026 :: GPL3
 github.com/Antony-hash512/Zero-Kelvin-Stazis
    __  __  _
   /  \|  |/ /  Zero Kelvin Offload Tool v"#,env!("CARGO_PKG_VERSION"),r#"
- │ 0  │  K  │  [ Freeze your data. Free your space. ]
+ ( 0  │  K <   [ Freeze your data. Free your space. ]
   \__/|__|\_\  Blazed by Rust
 "#
 );
