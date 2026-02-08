@@ -64,8 +64,10 @@ package() {
     install -Dm755 target/release/0k "$pkgdir/usr/bin/0k"
     install -Dm755 target/release/0k-safe-rm "$pkgdir/usr/bin/0k-safe-rm"
     
-    # Create alias symlink
+    # Create alias symlinks
     ln -s 0k "$pkgdir/usr/bin/zero-kelvin"
+    ln -s 0k-core "$pkgdir/usr/bin/zero-kelvin-core"
+    ln -s 0k-safe-rm "$pkgdir/usr/bin/zero-kelvin-safe-rm"
 
     # Установка лицензии и документации
     install -Dm644 LICENSE.GPLv3 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.GPLv3"

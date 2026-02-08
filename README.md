@@ -56,9 +56,9 @@ Currently in development. To build from source:
 cargo build --release
 ```
 
-The build produces two main binaries:
-- `0k`: The primary high-level orchestrator.
-- `0k-core`: Low-level tool for SquashFS and LUKS management.
+The build produces main binaries:
+- `0k`/`zero-kelvin`: The primary high-level orchestrator.
+- `0k-core`/`zero-kelvin-core`: Low-level tool for SquashFS and LUKS management.
 
 ---
 
@@ -162,9 +162,9 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 cargo build --release
 ```
 
-В результате сборки создаются два основных бинарных файла:
-- `0k`: Основной высокоуровневый оркестратор.
-- `0k-core`: Низкоуровневый инструмент для управления SquashFS и LUKS.
+В результате сборки создаются следующие бинарные файлы:
+- `0k`/`zero-kelvin`: Основной высокоуровневый оркестратор.
+- `0k-core`/`zero-kelvin-core`: Низкоуровневый инструмент для управления SquashFS и LUKS.
 
 ---
 
