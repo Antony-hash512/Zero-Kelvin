@@ -9,7 +9,7 @@
 
 ## English
 
-- **Zero-Kelvin Stazis (0k)** is a high-performance utility for data "conservation" that ensures full preservation of integrity, file attributes (permissions, ownership, timestamps), hierarchy, and location relative to the filesystem root.
+- **Zero-Kelvin (`0k`)** is a high-performance utility for data "conservation" that ensures full preservation of integrity, file attributes (permissions, ownership, timestamps), hierarchy, and location relative to the filesystem root.
 A Rust port of the `zero-kelvin-store` function set (originally written for Fish shell), the utility packs projects into compressed, mountable **SquashFS** images. It supports optional transparent encryption via standard **LUKS** (`cryptsetup`).
 - **Primary Goal:** To free up disk space while maintaining instant read-only access without the need for decompression, with the ability to extract individual files or the entire archive.
 
@@ -115,10 +115,10 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 
 ## Русский
 
-### 🧊 Zero-Kelvin Stazis (Rust)
+### 🧊 Zero-Kelvin (Rust)
 
 
-- **Zero-Kelvin Stazis (0k)** — это высокопроизводительная утилита для «консервации» данных с полным сохранением их целостности, атрибутов (прав доступа, владельцев, временных меток), иерархии и распольожения относительно корня файловой системы.
+- **Zero-Kelvin (`0k`)** — это высокопроизводительная утилита для «консервации» данных с полным сохранением их целостности, атрибутов (прав доступа, владельцев, временных меток), иерархии и распольожения относительно корня файловой системы.
 Являясь портом на Rust набора функций `zero-kelvin-store` (изначально написанных для Fish shell), утилита упаковывает проекты в сжатые, монтируемые образы **SquashFS**. Поддерживается опциональное прозрачное шифрование через стандартный **LUKS** (`cryptsetup`).
 - **Главная цель**: освобождение дискового пространства при сохранении мгновенного доступа к данным без необходимости распаковки (read-only) и возможностью распакавать к любые файлы как по отдельности так и весь архив целиком.
 
