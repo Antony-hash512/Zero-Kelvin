@@ -561,6 +561,14 @@ pub fn unfreeze<E: CommandExecutor>(
     options: &UnfreezeOptions,
     executor: &E,
 ) -> Result<(), ZkError> {
+    // 0. Check for LUKS (requires Root to mount)
+    // If it is LUKS and we are not root, fail early to trigger elevation retry in 0k
+    if utils::is_luks_image(archive_path, executor) {
+        if !utils::is_root().unwrap_or(false) {
+             return Err(ZkError::OperationFailed("Permission denied: Unfreezing LUKS archive requires root privileges.".to_string()));
+        }
+    }
+
     // 1. Create temporary mount point
     let mount_dir = tempfile::tempdir().map_err(|e| {
         ZkError::OperationFailed(format!("Failed to create temporary mount directory: {}", e))
