@@ -1,4 +1,4 @@
-# 🧊 Zero-Kelvin Stazis (Rust)
+# 🧊 Zero-Kelvin (Rust)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE.GPLv3)
 [![Rust](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/) 
