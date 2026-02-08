@@ -702,21 +702,6 @@ fn run_app() -> Result<(), ZkError> {
 /// Helper to determine if we need sudo/doas
 
 
-/// Check if the image file is a LUKS container
-/// Note: cryptsetup isLuks only reads the file header and doesn't require root privileges
-fn is_luks_image(image_path: &PathBuf, executor: &impl CommandExecutor) -> bool {
-    let img_str = match image_path.to_str() {
-        Some(s) => s,
-        None => return false,
-    };
-    
-    // Run cryptsetup isLuks directly (no sudo needed - just reads file header)
-    if let Ok(output) = executor.run("cryptsetup", &["isLuks", img_str]) {
-        output.status.success()
-    } else {
-        false
-    }
-}
 
 
 /// Generate mapper name from image basename (sanitized).
@@ -829,7 +814,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             
             // 0.1 Check for Existing Output
             if final_output.exists() {
-                let is_luks = is_luks_image(&final_output, executor);
+                let is_luks = zero_kelvin::utils::is_luks_image(&final_output, executor);
                 // Check valid SquashFS signature (magic number)
                 let is_sqfs = match zero_kelvin::utils::get_file_type(&final_output) {
                      Ok(zero_kelvin::utils::ArchiveType::Squashfs) => true,
@@ -1466,7 +1451,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             fs::create_dir_all(&target_mount_point).map_err(|e| ZkError::IoError(e))?;
             
             // Check if this is a LUKS container
-            if is_luks_image(&image, executor) {
+            if zero_kelvin::utils::is_luks_image(&image, executor) {
                 println!("Detected LUKS container. Opening encrypted image...");
                 
                 let mapper_name = generate_mapper_name(&image);

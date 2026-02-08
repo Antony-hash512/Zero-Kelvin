@@ -1,4 +1,5 @@
 use crate::error::ZkError;
+use crate::executor::CommandExecutor;
 use log::warn;
 use std::fs;
 use std::path::Path;
@@ -51,6 +52,20 @@ pub fn get_file_type(path: &Path) -> Result<ArchiveType, ZkError> {
             }
         },
         None => Ok(ArchiveType::Unknown),
+    }
+}
+
+pub fn is_luks_image(image_path: &Path, executor: &impl CommandExecutor) -> bool {
+    let img_str = match image_path.to_str() {
+        Some(s) => s,
+        None => return false,
+    };
+
+    // Run cryptsetup isLuks directly (no sudo needed - just reads file header)
+    if let Ok(output) = executor.run("cryptsetup", &["isLuks", img_str]) {
+        output.status.success()
+    } else {
+        false
     }
 }
 
