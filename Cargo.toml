@@ -5,8 +5,6 @@ edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
 # --- Определение Библиотеки (Общий код) ---
-# Имя библиотеки будет derived из [package] name: zero_kelvin_testing
-# В коде бинарников ты будешь использовать: use zero_kelvin_testing::engine;
 [lib]
 name = "zero_kelvin"
 path = "src/lib.rs"
