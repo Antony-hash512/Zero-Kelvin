@@ -96,7 +96,6 @@ pub enum Commands {
         overwrite_files: bool,
 
         /// Replace ENTIRE content of LUKS container (Requires LUKS output)
-        /// Replace ENTIRE content of LUKS container (Requires LUKS output)
         #[arg(long)]
         overwrite_luks_content: bool,
 
@@ -122,7 +121,6 @@ pub enum Commands {
 
         /// Prefix for auto-generated filename (when ARCHIVE_PATH is a directory).
         /// Skips the interactive prompt.
-        // #[arg(short = 'p', long, value_name = "NAME")]
         #[arg(long, value_name = "NAME")]
         prefix: Option<String>,
     },

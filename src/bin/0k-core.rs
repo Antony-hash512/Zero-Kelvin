@@ -432,7 +432,7 @@ pub enum Commands {
         #[arg(long)]
         vanilla_progress: bool,
 
-        /// Use experimental custom progress bar (broken, for testing only)
+        /// Use experimental custom progress bar (broken in encryption mode, for testing only)
         #[arg(long, hide = true)]
         alfa_progress: bool,
 
