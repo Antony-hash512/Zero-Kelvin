@@ -55,7 +55,9 @@ impl Args {
       ARCHIVE_PATH          Path to the .sqfs archive to check.
     Options:
       --use-cmp             Verify file content (byte-by-byte) in addition to size/mtime.
-      --delete        Delete local files if they match the archive (Destructive!).
+      --delete              Delete local files if they match the archive (Destructive!).
+      --force-delete        Modifier for --delete: also delete files newer than archive.
+                            (Useful for cleaning up already restored/unfrozen files).
 ",
             BANNER, DEFAULT_ZSTD_COMPRESSION
         ))
@@ -151,6 +153,12 @@ pub enum Commands {
         /// Delete local files if they match the archive content
         #[arg(long)]
         delete: bool,
+
+        /// Force delete even if local file is newer (ignoring mtime).
+        /// This is a modifier for --delete. Useful if you want to clean up
+        /// files that were already restored (unfrozen) as they often have newer mtime.
+        #[arg(long, requires = "delete")]
+        force_delete: bool,
     },
 }
 
@@ -312,9 +320,14 @@ fn run_app() -> Result<(), ZkError> {
             archive_path,
             use_cmp,
             delete,
+            force_delete,
         } => {
             let executor = RealSystem;
-            let options = engine::CheckOptions { use_cmp, delete };
+            let options = engine::CheckOptions {
+                use_cmp,
+                delete,
+                force_delete,
+            };
             // engine::check(&archive_path, &options, &executor)?;
             if let Err(e) = engine::check(&archive_path, &options, &executor) {
                 if utils::is_permission_denied(&e) {
@@ -535,10 +548,12 @@ mod tests {
                 archive_path,
                 use_cmp,
                 delete,
+                force_delete,
             } => {
                 assert_eq!(archive_path, PathBuf::from("archive.sqfs"));
                 assert!(use_cmp);
                 assert!(delete);
+                assert!(!force_delete);
             }
             _ => panic!("Expected Check command"),
         }

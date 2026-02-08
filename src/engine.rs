@@ -200,6 +200,7 @@ pub struct UnfreezeOptions {
 pub struct CheckOptions {
     pub use_cmp: bool,
     pub delete: bool,
+    pub force_delete: bool,
 }
 
 pub fn check<E: CommandExecutor>(
@@ -377,6 +378,10 @@ pub fn check<E: CommandExecutor>(
         stats_mismatch, stats_missing, stats_skipped
     );
 
+    if stats_skipped > 0 && options.delete && !options.force_delete {
+        println!("\nHint: {} file(s) were skipped because they are newer than the archive.\n      Use --force-delete along with --delete to delete them anyway (ignoring mtime).", stats_skipped);
+    }
+
     Ok(())
 }
 
@@ -497,7 +502,7 @@ fn check_item(
         // Safety Gate: Do not delete if Live file is NEWER than Archive
         // Exception: If use_cmp is enabled, we verified content is identical.
         // So even if mtime is newer (e.g. touched), data is safe to delete (it is backed up).
-        if !options.use_cmp {
+        if !options.use_cmp && !options.force_delete {
             if live_mtime > archive_mtime {
                 println!("SKIPPED (Newer): {} (Live mtime > Archive)", display_name);
                 *stats_skipped += 1;

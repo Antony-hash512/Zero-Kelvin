@@ -132,3 +132,5 @@ and run_colored_bats tests/13_luks_cleaning.bats
 and run_colored_bats tests/14_luks_unfreeze.bats
 and run_colored_bats tests/15_luks_check.bats
 and run_colored_bats tests/16_luks_fullcycle.bats
+
+and run_colored_bats tests/17_reproduce_force_delete.bats
