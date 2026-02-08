@@ -768,9 +768,14 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             if encrypt {
                 #[cfg(not(test))]
                 {
-                    let euid = unsafe { libc::geteuid() };
-                    if euid != 0 {
-                        return Err(ZkError::OperationFailed("LUKS creation requires root privileges: must be run as root".to_string()));
+                    if !zero_kelvin::utils::is_root().unwrap_or(false) {
+                        if let Some(runner) = zero_kelvin::utils::check_root_or_get_runner(
+                            "LUKS creation requires root privileges. Retrying with elevation...",
+                        )? {
+                            return zero_kelvin::utils::re_exec_with_runner(&runner);
+                        } else {
+                            return Err(ZkError::OperationFailed("LUKS creation requires root privileges: must be run as root".to_string()));
+                        }
                     }
                 }
             }
@@ -1452,6 +1457,13 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             
             // Check if this is a LUKS container
             if zero_kelvin::utils::is_luks_image(&image, executor) {
+                if !zero_kelvin::utils::is_root().unwrap_or(false) {
+                    if let Some(runner) = zero_kelvin::utils::check_root_or_get_runner(
+                        "Mounting LUKS archives requires root privileges. Retrying with elevation...",
+                    )? {
+                        return zero_kelvin::utils::re_exec_with_runner(&runner);
+                    }
+                }
                 println!("Detected LUKS container. Opening encrypted image...");
                 
                 let mapper_name = generate_mapper_name(&image);
