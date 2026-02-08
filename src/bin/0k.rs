@@ -16,7 +16,7 @@ pub struct Args {
 const BANNER: &str = concat!(
     r#"
 Copyleft 🄯 2026 :: GPL3
-github.com/Antony-hash512/Zero-Kelvin-Stazis
+github.com/Antony-hash512/Zero-Kelvin
    __  __  _
   /  \|  |/ /  Zero Kelvin Offload Tool v"#,env!("CARGO_PKG_VERSION"),r#"
  ( 0  │  K <   [ Freeze your data. Free your space. ]

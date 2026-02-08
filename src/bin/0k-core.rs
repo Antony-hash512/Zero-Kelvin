@@ -305,7 +305,7 @@ pub struct Args {
 
 const BANNER: &str = r#"
 Copyleft 🄯 2026 :: GPL3
-github.com/Antony-hash512/Zero-Kelvin-Stazis
+github.com/Antony-hash512/Zero-Kelvin
   ____  _                            
  / __ \| | __      ___ ___  _ __ ___ 
 | | /| | |/ /____ / __/ _ \| '__/ _ \
@@ -406,9 +406,9 @@ impl CompressionMode {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Commands {
-    /// Create a new SquashFS archive from a directory or existing archive
+    /// Create a new SquashFS archive from a directory or existing tar archive file
     Create {
-        /// Path to the source directory or archive file (tar, zip, etc.)
+        /// Path to the source directory or tar archive file
         #[arg(value_name = "INPUT")]
         input_path: PathBuf,
 
