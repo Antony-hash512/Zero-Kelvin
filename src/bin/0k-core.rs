@@ -1802,6 +1802,7 @@ mod tests {
     use std::path::Path;
     use std::process::Output;
     use zero_kelvin::executor::MockCommandExecutor;
+    use zero_kelvin::constants::DEFAULT_ZSTD_COMPRESSION;
     use mockall::predicate::*;
 
 

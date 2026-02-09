@@ -33,10 +33,7 @@ pkg:
     cd local_pkg && makepkg -f
 
 # Собрать и установить пакет
-pkg-install:
-    cargo bump patch
-    cargo check --locked || cargo update --workspace
-    just pkg-clean
+pkg-install: bump
     cd local_pkg && makepkg -fsi
 
 # Очистка артефактов сборки пакета
@@ -49,11 +46,11 @@ clean-all:
     cargo clean
 
 
-# Обновление версии и проверка зависимостей без сборки пакета
+# Обновление версии и синхронизация lock-файла без сборки пакета
 bump:
     cargo bump patch
-    cargo check --locked || cargo update --workspace
-
+    cargo update --workspace
+    cargo check --locked
 
 # Запуск всех юнит-тестов
 unit-tests:

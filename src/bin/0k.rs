@@ -320,6 +320,7 @@ fn resolve_freeze_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[test]
     fn verify_cli() {
