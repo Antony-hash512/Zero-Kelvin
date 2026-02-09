@@ -60,29 +60,32 @@ The build produces main binaries:
 - `0k`/`zero-kelvin`: The primary high-level orchestrator.
 - `0k-core`/`zero-kelvin-core`: Low-level tool for SquashFS and LUKS management.
 
+Auxiliary utility:
+- `0k-safe-rm`/`zero-kelvin-safe-rm`: Used "under the hood" for safe cache cleaning.
+
 ---
 
 ### 📖 Usage
 
 #### Freeze (Archive/Offload)
-Move logically grouped paths into a "frozen" state.
+Move logically grouped paths into a "frozen" state (`0k` and `zero-kelvin` are fully equivalent aliases for this utility).
 
 ```bash
 # Basic freeze
-0k freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
+zero-kelvin freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
 
 # Encrypted freeze
-0k freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
+zero-kelvin freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
 
 # Freeze multiple targets
-0k freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
+zero-kelvin freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
 ```
 
 #### Unfreeze (Restore)
 Return data to its original location instantly.
 
 ```bash
-0k unfreeze /mnt/nas/archives/old-work.sqfs
+zero-kelvin unfreeze /mnt/nas/archives/old-work.sqfs
 ```
 
 #### Check (Verify)
@@ -90,10 +93,24 @@ Compare an archive against the live system.
 
 ```bash
 # Verify integrity
-0k check /mnt/nas/archives/old-work.sqfs
+zero-kelvin check /mnt/nas/archives/old-work.sqfs
 
 # Verify and safely delete local files that match the archive (Offloading)
-0k check --delete /mnt/nas/archives/old-work.sqfs
+zero-kelvin check --delete /mnt/nas/archives/old-work.sqfs
+```
+
+#### Mount
+Mount an archive to a specified point to view its contents in read-only mode (uses `zero-kelvin-core`/`0k-core`).
+
+```bash
+zero-kelvin-core mount /mnt/nas/archives/old-work.sqfs /mnt/archives/old-work
+```
+
+#### Unmount
+Unmount an archive (uses `zero-kelvin-core`/`0k-core`).
+
+```bash
+zero-kelvin-core unmount /mnt/archives/old-work
 ```
 
 ---
@@ -166,29 +183,32 @@ cargo build --release
 - `0k`/`zero-kelvin`: Основной высокоуровневый оркестратор.
 - `0k-core`/`zero-kelvin-core`: Низкоуровневый инструмент для управления SquashFS и LUKS.
 
+Вспомогательная утилита:
+- `0k-safe-rm`/`zero-kelvin-safe-rm`: используется "под капотом" для безопастной очистки кеша.
+
 ---
 
 ### 📖 Использование
 
 #### Freeze (Архивация/Заморозка)
-Перемещение логически сгруппированных путей в «замороженное» состояние.
+Перемещение логически сгруппированных путей в «замороженное» состояние (`0k` и `zero-kelvin` - это полностью равноправные алиасы данной утилиты).
 
 ```bash
 # Базовая заморозка
-0k freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
+zero-kelvin freeze ~/projects/old-work /mnt/nas/archives/old-work.sqfs
 
 # Шифрованная заморозка
-0k freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
+zero-kelvin freeze --encrypt ~/secret-data /mnt/nas/archives/secure.sqfs_luks.img
 
 # Заморозка нескольких целей
-0k freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
+zero-kelvin freeze /etc/nginx/sites-available /var/www/html /mnt/nas/backup/web-server.sqfs
 ```
 
 #### Unfreeze (Разморозка/Восстановление)
 Мгновенный возврат данных на их исходные места.
 
 ```bash
-0k unfreeze /mnt/nas/archives/old-work.sqfs
+zero-kelvin unfreeze /mnt/nas/archives/old-work.sqfs
 ```
 
 #### Check (Проверка)
@@ -196,10 +216,24 @@ cargo build --release
 
 ```bash
 # Проверка целостности
-0k check /mnt/nas/archives/old-work.sqfs
+zero-kelvin check /mnt/nas/archives/old-work.sqfs
 
 # Проверка и безопасное удаление локальных файлов, совпадающих с архивом (Offloading)
-0k check --delete /mnt/nas/archives/old-work.sqfs
+zero-kelvin check --delete /mnt/nas/archives/old-work.sqfs
+```
+
+#### Mount (Монтирование)
+Монтирование архива в указанную точку для просмотра его содержимого в режиме "только чтение" (используется `zero-kelvin-core`/`0k-core`).
+
+```bash
+zero-kelvin-core mount /mnt/nas/archives/old-work.sqfs /mnt/archives/old-work
+```
+
+#### Unmount (Размонтирование)
+Размонтирование архива (используется `zero-kelvin-core`/`0k-core`).
+
+```bash
+zero-kelvin-core unmount /mnt/archives/old-work
 ```
 
 ---
