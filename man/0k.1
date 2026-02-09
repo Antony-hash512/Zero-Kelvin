@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH 0k 1  "0k " 
+.TH 0k 1  "0k 0.2.29" 
 .SH NAME
 0k \- Zero Kelvin \- Cold Storage Utility
 .SH SYNOPSIS
-\fB0k\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+\fB0k\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
 .SH DESCRIPTION
 Zero Kelvin \- Cold Storage Utility
 .SH OPTIONS
@@ -14,28 +14,8 @@ Print help
 .TP
 \fB\-V\fR, \fB\-\-version\fR
 Print version
-.SH SUBCOMMANDS
-.TP
-0k\-freeze(1)
-Offload data to a SquashFS archive (frozen state)
-.TP
-0k\-unfreeze(1)
-Unfreeze (restore) data from a SquashFS archive
-.TP
-0k\-check(1)
-Check integrity of an archive against the original files
-.TP
-0k\-help(1)
-Print this message or the help of the given subcommand(s)
 .SH EXTRA
 Detailed Command Information:
-
-Copyleft 🄯 2026 :: GPL3
-github.com/Antony\-hash512/Zero\-Kelvin
-   __  __  _
-  /  \\|  |/ /  Zero Kelvin Offload Tool v0.2.24
- ( 0  │  K <   [ Freeze your data. Free your space. ]
-  \\__/|__|\\_\\  Blazed by Rust
 
   freeze [TARGETS...] [ARCHIVE_PATH] [OPTIONS]
     Offload data to a SquashFS archive (frozen state).
@@ -75,5 +55,6 @@ Full help for a specific command can be obtained via:
   zero\-kelvin <command> \-\-help
   0k help <command>
 .SH VERSION
-vZero Kelvin Offload Tool
-a.k.a. `0k` 0.2.24
+v0.2.29
+.SH AUTHORS
+Copyleft 🄯 2026 :: GPL3 github.com/Antony\-hash512/Zero\-Kelvin

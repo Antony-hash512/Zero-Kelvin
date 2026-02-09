@@ -77,4 +77,8 @@ package() {
     # Установка man-страниц
     install -Dm644 man/0k.1 "$pkgdir/usr/share/man/man1/0k.1"
     install -Dm644 man/0k-core.1 "$pkgdir/usr/share/man/man1/0k-core.1"
+    
+    # Symlinks к man-страницам
+    ln -s 0k.1 "$pkgdir/usr/share/man/man1/zero-kelvin.1"
+    ln -s 0k-core.1 "$pkgdir/usr/share/man/man1/zero-kelvin-core.1"
 }

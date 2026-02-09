@@ -17,7 +17,7 @@ also known as
 \___ \ / _` | | | |/ _` / __| '_ \  
  ___) | (_| | |_| | (_| \__ \ | | | 
 |____/ \__, |\__,_|\__,_|___/_| |_| 
-          |_|  Core              
+          |_|  Manager           
 "#;
 
 #[derive(Parser, Debug)]
@@ -47,7 +47,7 @@ impl Args {
       -c, --compression N   Zstd compression level (default: {1}) 0 = no compression.
       --no-progress         Disable progress bar completely.
       --vanilla-progress    Use native mksquashfs progress (explicit, also default).
-      --alfa-progress       Use experimental custom progress bar (broken, for testing).
+      --alfa-progress       Use experimental custom progress bar (not fixed in encryption mode, yet; for testing).
 
     Supported Input Formats (repacked on-the-fly via pipe):
       - Directory: Standard behavior
