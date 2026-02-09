@@ -137,6 +137,10 @@ pub enum Commands {
         /// Skip existing files (conflicts)
         #[arg(long)]
         skip_existing: bool,
+
+        /// Skip hostname mismatch check (non-interactive mode)
+        #[arg(long)]
+        force_unfreeze: bool,
     },
     /// Check integrity of an archive against the original files
     Check {
@@ -318,10 +322,12 @@ fn run_app() -> Result<(), ZkError> {
             archive_path,
             overwrite,
             skip_existing,
+            force_unfreeze,
         } => {
             let options = UnfreezeOptions {
                 overwrite,
                 skip_existing,
+                force_unfreeze,
             };
             let executor = RealSystem;
             // engine::unfreeze(&archive_path, &options, &executor)?;

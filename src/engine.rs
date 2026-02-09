@@ -287,6 +287,7 @@ pub struct FreezeOptions {
 pub struct UnfreezeOptions {
     pub overwrite: bool,
     pub skip_existing: bool,
+    pub force_unfreeze: bool,
 }
 
 pub struct CheckOptions {
@@ -791,6 +792,29 @@ fn restore_from_mount<E: CommandExecutor>(
 
     // 4. Validate manifest (paths)
     manifest.validate()?;
+
+    // 4.1 Hostname mismatch check
+    if !options.force_unfreeze {
+        if let Ok(current_host) = get_hostname() {
+            if manifest.metadata.host != current_host {
+                eprintln!(
+                    "Warning: This archive was created on host '{}', but current host is '{}'.\n\
+                     Restore paths may not exist or may differ on this system.",
+                    manifest.metadata.host, current_host
+                );
+
+                // Interactive confirmation
+                eprint!("Continue with unfreeze? [y/N] ");
+                let mut input = String::new();
+                if std::io::stdin().read_line(&mut input).is_err() || !input.trim().eq_ignore_ascii_case("y") {
+                    return Err(ZkError::OperationFailed(
+                        "Unfreeze aborted by user due to hostname mismatch. \
+                         Use --force-unfreeze to skip this check.".into()
+                    ));
+                }
+            }
+        }
+    }
 
     println!("Restoring {} files from archive...", manifest.files.len());
 
@@ -1447,6 +1471,7 @@ mod tests {
         let options = UnfreezeOptions {
             overwrite: false,
             skip_existing: false,
+            force_unfreeze: true,
         };
 
         restore_from_mount(mount_path, &options, &mock).unwrap();
@@ -1505,6 +1530,7 @@ mod tests {
         let options = UnfreezeOptions {
             overwrite: false,
             skip_existing: false,
+            force_unfreeze: true,
         };
 
         restore_from_mount(mount_path, &options, &mock).unwrap();
