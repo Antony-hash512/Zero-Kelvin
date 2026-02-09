@@ -1904,6 +1904,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
 mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
+    use std::path::Path;
     use std::process::Output;
     use zero_kelvin::executor::MockCommandExecutor;
     use mockall::predicate::*;
@@ -1926,7 +1927,7 @@ mod tests {
         let mut mock = MockCommandExecutor::new();
         // Expectation: mksquashfs input_dir output.sqfs -no-progress -comp zstd -Xcompression-level <DEFAULT_ZSTD_COMPRESSION>
         mock.expect_run()
-            .withf(move |program, args| {
+            .withf(move |program, args: &[&str]| {
                  program == "mksquashfs" &&
                  args.len() == 8 &&
                  args[0] == input_path_check &&
@@ -2006,7 +2007,7 @@ mod tests {
         // Need to capture output_path to create the file in the returning closure
 
         mock.expect_run()
-            .withf(|program, args| {
+            .withf(|program, args: &[&str]| {
                 program == "fallocate" && args.len() == 3 && args[0] == "-l"
             })
             .times(1)
@@ -2066,10 +2067,10 @@ mod tests {
         // output to /dev/mapper/...
 
         mock.expect_run()
-            .withf(move |program, args| {
+            .withf(move |program, args: &[&str]| {
                  let is_runner = ["sudo", "doas", "run0"].contains(&program);
                  let is_direct = program == "mksquashfs";
-                 
+
                  if is_direct {
                      args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
                  } else if is_runner {
@@ -2087,7 +2088,7 @@ mod tests {
             
         // 6. unsquashfs -s (Trim size) - called directly without sudo
         mock.expect_run()
-            .withf(|program, args| program == "unsquashfs" && args.contains(&"-s"))
+            .withf(|program, args: &[&str]| program == "unsquashfs" && args.contains(&"-s"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -2097,7 +2098,7 @@ mod tests {
             
         // 7. luksDump (Offset) - called directly without sudo
         mock.expect_run()
-            .withf(|program, args| program == "cryptsetup" && args.contains(&"luksDump"))
+            .withf(|program, args: &[&str]| program == "cryptsetup" && args.contains(&"luksDump"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -2118,7 +2119,7 @@ mod tests {
 
         // 8.2 udevadm settle
         mock.expect_run()
-            .withf(|program, args| program == "udevadm" && args.contains(&"settle"))
+            .withf(|program, args: &[&str]| program == "udevadm" && args.contains(&"settle"))
             .times(1)
             .returning(|_, _| Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
@@ -2128,10 +2129,10 @@ mod tests {
 
         // 8.3 close (from LuksTransaction drop)
         mock.expect_run()
-            .withf(|program, args| {
+            .withf(|program, args: &[&str]| {
                 let is_runner = ["sudo", "doas", "run0"].contains(&program);
                 let is_direct = program == "cryptsetup";
-                
+
                 if is_direct {
                     args.contains(&"close")
                 } else if is_runner {
@@ -2179,7 +2180,7 @@ mod tests {
         
         // 0. cryptsetup isLuks (LUKS detection) - returns failure (not LUKS)
         mock.expect_run()
-            .withf(|program, args| {
+            .withf(|program, args: &[&str]| {
                 program == "cryptsetup" && args.len() == 2 && args[0] == "isLuks"
             })
             .times(1)
@@ -2191,7 +2192,7 @@ mod tests {
         
         // 1. squashfuse (for plain SquashFS)
         mock.expect_run()
-            .withf(move |program, args| {
+            .withf(move |program, args: &[&str]| {
                 program == "squashfuse" &&
                 args.len() == 4 && // -o nonempty image mountpoint
                 args[0] == "-o" &&
@@ -2266,7 +2267,7 @@ mod tests {
         let mut mock = MockCommandExecutor::new();
         // Expectation: mksquashfs input output -no-progress -no-compression
         mock.expect_run()
-            .withf(move |program, args| {
+            .withf(move |program, args: &[&str]| {
                  program == "mksquashfs" &&
                  args.len() == 5 && // input, output, -no-progress, -noappend, -no-compression
                  args[0] == input_path_check &&
@@ -2340,7 +2341,7 @@ mod tests {
         
         // EXPECTATION:
         mock.expect_run_with_file_progress()
-            .withf(move |program, args, output_file, _, _| {
+            .withf(move |program, args: &[&str], output_file: &Path, _, _| {
                  program == "sh" &&
                  args.len() == 2 &&
                  args[0] == "-c" &&
@@ -2394,7 +2395,7 @@ mod tests {
     fn test_open_luks_container_success_first_try() {
         let mut mock = MockCommandExecutor::new();
         mock.expect_run_interactive()
-            .withf(|prog, args| {
+            .withf(|prog, args: &[&str]| {
                 prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
                     && args.contains(&"sq_test")
             })
@@ -2418,7 +2419,7 @@ mod tests {
         let call_count_clone = call_count.clone();
 
         mock.expect_run_interactive()
-            .withf(|prog, args| {
+            .withf(|prog, args: &[&str]| {
                 prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
             })
             .times(2)
@@ -2448,7 +2449,7 @@ mod tests {
     fn test_open_luks_container_real_error_no_retry() {
         let mut mock = MockCommandExecutor::new();
         mock.expect_run_interactive()
-            .withf(|prog, args| {
+            .withf(|prog, args: &[&str]| {
                 prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
             })
             .times(1) // Should only try once

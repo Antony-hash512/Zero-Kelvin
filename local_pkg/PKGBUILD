@@ -51,7 +51,7 @@ build() {
 check() {
     cd "$srcdir/$pkgname"
     export CARGO_TARGET_DIR="$srcdir/$pkgname/target"
-    cargo test --release --locked
+    cargo test --release --locked --features testing
     
     # Запуск интеграционных тестов на бинарниках, которые мы только что собрали
     # Используем --no-build-release, так как release-бинарники уже собраны в этапе build()
