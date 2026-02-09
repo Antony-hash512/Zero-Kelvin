@@ -61,13 +61,21 @@ impl FileEntry {
 
         let name = abs_path.file_name()
             .ok_or_else(|| ZkError::InvalidPath(path.to_path_buf()))?
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .ok_or_else(|| ZkError::OperationFailed(format!(
+                "Path contains non-UTF8 characters: {:?}. Non-UTF8 filenames are not supported.",
+                path
+            )))?
+            .to_string();
 
         let restore_path = abs_path.parent()
             .ok_or_else(|| ZkError::InvalidPath(path.to_path_buf()))?
-            .to_string_lossy()
-            .into_owned();
+            .to_str()
+            .ok_or_else(|| ZkError::OperationFailed(format!(
+                "Parent path contains non-UTF8 characters: {:?}. Non-UTF8 paths are not supported.",
+                path
+            )))?
+            .to_string();
 
         Ok(FileEntry {
             id,
@@ -80,8 +88,10 @@ impl FileEntry {
 
     pub fn validate(&self) -> Result<(), ZkError> {
         if let Some(name) = &self.name {
-            if name.contains("..") || name.contains('/') {
-                return Err(ZkError::ManifestError(serde_yaml::Error::custom(format!("Invalid name contains '..' or '/': {}", name))));
+            if name == ".." || name == "." || name.contains('/') || name.contains('\0') {
+                return Err(ZkError::ManifestError(serde_yaml::Error::custom(format!(
+                    "Invalid name: '{}'. Names cannot be '.', '..', or contain '/' or null bytes.", name
+                ))));
             }
         }
 
@@ -263,6 +273,36 @@ files: []
             original_path: None,
         };
         assert!(bad_name.validate().is_err());
+
+        // Valid: name with consecutive dots (not path traversal)
+        let dots_name = FileEntry {
+            id: 10,
+            entry_type: EntryType::File,
+            name: Some("backup..2024.tar".to_string()),
+            restore_path: Some("/home/user".to_string()),
+            original_path: None,
+        };
+        assert!(dots_name.validate().is_ok(), "Names with consecutive dots should be valid");
+
+        // Invalid: name is exactly ".."
+        let dot_dot_name = FileEntry {
+            id: 11,
+            entry_type: EntryType::File,
+            name: Some("..".to_string()),
+            restore_path: Some("/home/user".to_string()),
+            original_path: None,
+        };
+        assert!(dot_dot_name.validate().is_err(), "Name '..' should be rejected");
+
+        // Invalid: name is exactly "."
+        let dot_name = FileEntry {
+            id: 12,
+            entry_type: EntryType::File,
+            name: Some(".".to_string()),
+            restore_path: Some("/home/user".to_string()),
+            original_path: None,
+        };
+        assert!(dot_name.validate().is_err(), "Name '.' should be rejected");
 
         // Invalid: .. in restore_path
         let bad_path = FileEntry {

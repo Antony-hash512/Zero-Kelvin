@@ -29,6 +29,11 @@ pub enum ZkError {
     
     #[error("Missing target: {0}")]
     MissingTarget(String),
+
+    /// CLI argument parsing resulted in an error that was already printed.
+    /// Carries the desired process exit code (e.g. 2 for invalid subcommand).
+    #[error("")]
+    CliExit(i32),
 }
 
 impl ZkError {

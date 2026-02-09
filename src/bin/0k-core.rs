@@ -7,6 +7,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
@@ -17,6 +18,9 @@ use zero_kelvin::executor::{CommandExecutor, RealSystem};
 /// Used by ctrlc handler to remove incomplete output files
 static CLEANUP_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 static CLEANUP_MAPPER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+/// Flag set by Ctrl+C handler. Main thread checks this after returning from run_app().
+/// We avoid process::exit() in the handler so that RAII destructors (LuksTransaction, etc.) run.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(serde::Deserialize)]
 struct RootCmdConfig {
@@ -192,7 +196,11 @@ fn get_effective_root_cmd() -> Vec<String> {
         }
     }
 
-    // Fallback to sudo (legacy behavior)
+    // No escalation tool found in PATH — warn and try sudo as last resort
+    eprintln!(
+        "Warning: No privilege escalation tool (sudo, doas, run0, pkexec, please) found in PATH.\n\
+         Falling back to 'sudo', which will likely fail."
+    );
     vec!["sudo".to_string()]
 }
 
@@ -624,10 +632,24 @@ fn get_fs_overhead_percentage(path: &PathBuf, executor: &impl CommandExecutor) -
 }
 
 
-fn main() {
-    if let Err(e) = run_app() {
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
+fn main() -> std::process::ExitCode {
+    let result = run_app();
+
+    // Check interrupt flag first — Ctrl+C always takes priority
+    if INTERRUPTED.load(Ordering::SeqCst) {
+        return std::process::ExitCode::from(130);
+    }
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(ZkError::CliExit(code)) => {
+            // Already printed by clap — just propagate exit code
+            std::process::ExitCode::from(code as u8)
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::ExitCode::FAILURE
+        }
     }
 }
 
@@ -637,11 +659,15 @@ fn run_app() -> Result<(), ZkError> {
     }
     env_logger::init();
 
-    // Set up Ctrl+C handler for cleanup
+    // Set up Ctrl+C handler for cleanup.
+    // We set the INTERRUPTED flag instead of calling process::exit() so that RAII destructors
+    // (LuksTransaction, CreateTransaction, etc.) run properly when the main thread unwinds.
     ctrlc::set_handler(|| {
+        INTERRUPTED.store(true, Ordering::SeqCst);
         cleanup_on_interrupt();
-        process::exit(130); // 128 + SIGINT(2) = standard exit code for Ctrl+C
-    }).expect("Error setting Ctrl+C handler");
+        // Do NOT call process::exit() here — let the main thread unwind normally
+        // so that Drop impls for LuksTransaction/CreateTransaction run.
+    }).map_err(|e| ZkError::OperationFailed(format!("Failed to set signal handler: {}", e)))?;
 
     let args_raw: Vec<String> = std::env::args().collect();
 
@@ -665,7 +691,7 @@ fn run_app() -> Result<(), ZkError> {
                         eprintln!("Error: {}\n", e);
                         Args::build_command().print_help()?;
                         println!();
-                        std::process::exit(2);
+                        return Err(ZkError::CliExit(2));
                     }
                 }
                 // 3. Command specific errors -> Subcommand Help
@@ -677,22 +703,30 @@ fn run_app() -> Result<(), ZkError> {
                              eprintln!("Error: {}\n", e);
                              sub_cmd.print_help()?;
                              println!();
-                             std::process::exit(e.exit_code());
+                             return Err(ZkError::CliExit(e.exit_code()));
                         }
                     }
                 }
+                // --help, --version: clap prints output, we return with exit code 0
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    let _ = e.print();
+                    return Ok(());
+                }
                 _ => {}
             }
-            e.exit();
+            // Fallback: print and return with clap's exit code
+            let code = e.exit_code();
+            let _ = e.print();
+            return Err(ZkError::CliExit(code));
         }
     };
-    
+
     use clap::FromArgMatches;
-    let args = Args::from_arg_matches(&matches)
-        .map_err(|e| {
-            e.exit();
-        })
-        .unwrap();
+    let args = Args::from_arg_matches(&matches).map_err(|e| {
+        let code = e.exit_code();
+        let _ = e.print();
+        ZkError::CliExit(code)
+    })?;
 
     let executor = RealSystem;
 
@@ -706,6 +740,9 @@ fn run_app() -> Result<(), ZkError> {
 
 /// Generate mapper name from image basename (sanitized).
 /// Checks /dev/mapper for collisions and appends a numeric suffix if needed.
+/// Generate a sanitized mapper name from the image filename.
+/// Returns the base name (e.g., `sq_backup_sqfs`). Does NOT check /dev/mapper/ for collisions.
+/// Collision handling is done atomically at the `cryptsetup open` call site.
 fn generate_mapper_name(image_path: &PathBuf) -> String {
     let basename = image_path
         .file_name()
@@ -718,24 +755,77 @@ fn generate_mapper_name(image_path: &PathBuf) -> String {
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect();
 
-    let base = format!("sq_{}", sanitized);
+    format!("sq_{}", sanitized)
+}
 
-    // Check for collision: if /dev/mapper/<base> already exists, append suffix
-    if !PathBuf::from(format!("/dev/mapper/{}", base)).exists() {
-        return base;
-    }
-
-    for i in 2..=99 {
-        let candidate = format!("{}_{}", base, i);
-        if !PathBuf::from(format!("/dev/mapper/{}", candidate)).exists() {
-            return candidate;
+/// Open a LUKS container with automatic retry on mapper name collision.
+/// Tries the base name first, then appends `_2`, `_3`, ..., and finally a random suffix.
+/// Returns the mapper name that was successfully opened.
+///
+/// cryptsetup exit codes:
+///   0 = success
+///   5 = device already exists (name collision) — we retry with a different name
+///   anything else = real error (wrong password, corrupt header, etc.) — we fail
+fn open_luks_container(
+    executor: &impl CommandExecutor,
+    root_cmd: &[String],
+    image_path_str: &str,
+    base_mapper_name: &str,
+) -> Result<String, ZkError> {
+    let candidates: Vec<String> = {
+        let mut v: Vec<String> = Vec::with_capacity(12);
+        v.push(base_mapper_name.to_string());
+        for i in 2..=10 {
+            v.push(format!("{}_{}", base_mapper_name, i));
         }
+        // Final fallback: timestamp + random (virtually unique)
+        let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let rnd: u32 = rand::Rng::random_range(&mut rand::rng(), 1000..9999);
+        v.push(format!("{}_{}_{}", base_mapper_name, ts, rnd));
+        v
+    };
+
+    for (i, mapper_name) in candidates.iter().enumerate() {
+        let mut open_args: Vec<String> = root_cmd.to_vec();
+        open_args.extend([
+            "cryptsetup".to_string(),
+            "open".to_string(),
+            image_path_str.to_string(),
+            mapper_name.clone(),
+        ]);
+
+        let prog = open_args.remove(0);
+        let args_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
+
+        let status = executor
+            .run_interactive(&prog, &args_refs)
+            .map_err(|e| ZkError::IoError(e))?;
+
+        if status.success() {
+            if i > 0 {
+                eprintln!(
+                    "Info: Mapper name collision resolved (using '{}' instead of '{}')",
+                    mapper_name, base_mapper_name
+                );
+            }
+            return Ok(mapper_name.clone());
+        }
+
+        // Exit code 5 = "device already exists" — try next name
+        if status.code() == Some(5) {
+            continue;
+        }
+
+        // Any other error (wrong password, corrupt header, etc.) — stop immediately
+        return Err(ZkError::LuksError(format!(
+            "cryptsetup open failed (exit code: {:?})",
+            status.code()
+        )));
     }
 
-    // Fallback: use timestamp + random to guarantee uniqueness
-    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-    let rnd: u32 = rand::rng().random_range(1000..9999);
-    format!("{}_{}_{}", base, ts, rnd)
+    Err(ZkError::LuksError(
+        "Could not find available mapper name after all retries".to_string(),
+    ))
 }
 
 
@@ -753,6 +843,14 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             overwrite_files,
             overwrite_luks_content,
         } => {
+            // 0. Validate compression level
+            if compression > 22 {
+                return Err(ZkError::CompressionError(format!(
+                    "Invalid compression level: {}. Zstd supports levels 0-22 (0 = no compression).",
+                    compression
+                )));
+            }
+
             // 1. Check if input exists (First validation)
             if !input_path.exists() {
                 return Err(ZkError::InvalidPath(input_path.clone()));
@@ -800,7 +898,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                             .and_then(|n| n.to_str())
                             .unwrap_or("archive");
                         
-                        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                         let rnd: u32 = rand::rng().random_range(100000..999999);
                         
                         let ext = if encrypt { "sqfs_luks.img" } else { "sqfs" };
@@ -980,22 +1078,15 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                      println!("Opening existing LUKS container for update...");
                 }
 
-                // 3. Open
-                let mapper_name = generate_mapper_name(&output_buf);
-                
+                // 3. Open (with atomic retry on mapper name collision)
+                let base_mapper_name = generate_mapper_name(&output_buf);
                 println!("Opening LUKS container...");
-                let mut open_args = root_cmd.clone();
-                open_args.extend(vec!["cryptsetup".to_string(), "open".to_string(), output_str.to_string(), mapper_name.clone()]);
-                
-                let prog_open = open_args.remove(0);
-                let args_open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
-
-                let status_open = executor.run_interactive(&prog_open, &args_open_refs)
-                    .map_err(|e| ZkError::IoError(e))?;
-                
-                if !status_open.success() {
-                    return Err(ZkError::LuksError("cryptsetup open failed".to_string()));
-                }
+                let mapper_name = open_luks_container(
+                    executor,
+                    &root_cmd,
+                    &output_str,
+                    &base_mapper_name,
+                )?;
                 
                 transaction.set_mapper(mapper_name.clone());
                 let mapper_path = format!("/dev/mapper/{}", mapper_name);
@@ -1074,7 +1165,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                             ProgressStyle::with_template(
                                 "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}% {msg}"
                             )
-                            .unwrap()
+                            .map_err(|e| ZkError::OperationFailed(format!("Progress bar template error: {}", e)))?
                             .progress_chars("█▓▒░  ")
                         );
                         pb.set_message("Encrypting → SquashFS+LUKS");
@@ -1281,7 +1372,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                         ProgressStyle::with_template(
                             "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
                         )
-                        .unwrap()
+                        .map_err(|e| ZkError::OperationFailed(format!("Progress bar template error: {}", e)))?
                         .progress_chars("█▓▒░  ")
                     );
                     pb.set_message("Repacking archive → SquashFS");
@@ -1380,7 +1471,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                                 ProgressStyle::with_template(
                                     "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
                                 )
-                                .unwrap()
+                                .map_err(|e| ZkError::OperationFailed(format!("Progress bar template error: {}", e)))?
                                 .progress_chars("█▓▒░  ")
                             );
                             pb.set_message("Packing directory → SquashFS");
@@ -1504,25 +1595,16 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                     let _ = executor.run(&close_prog, &close_refs);
                 }
                 
-                // Open LUKS container (interactive - will ask for password)
+                // Open LUKS container (with atomic retry on name collision)
                 println!("Opening encrypted container (password required)...");
-                let mut open_args = root_cmd.clone();
-                open_args.extend(vec![
-                    "cryptsetup".to_string(),
-                    "open".to_string(),
-                    image.to_str().ok_or(ZkError::InvalidPath(image.clone()))?.to_string(),
-                    mapper_name.clone(),
-                ]);
-                
-                let open_prog = open_args.remove(0);
-                let open_refs: Vec<&str> = open_args.iter().map(|s| s.as_str()).collect();
-                
-                let status = executor.run_interactive(&open_prog, &open_refs)
-                    .map_err(|e| ZkError::IoError(e))?;
-                
-                if !status.success() {
-                    return Err(ZkError::LuksError("Failed to open encrypted container".to_string()));
-                }
+                let image_str = image.to_str().ok_or(ZkError::InvalidPath(image.clone()))?;
+                let mapper_name = open_luks_container(
+                    executor,
+                    &root_cmd,
+                    image_str,
+                    &mapper_name,
+                )?;
+                let mapper_path = format!("/dev/mapper/{}", mapper_name);
                 
                 // Mount the mapper device
                 let mut mount_args = root_cmd.clone();
@@ -1823,33 +1905,8 @@ mod tests {
     use super::*;
     use std::os::unix::process::ExitStatusExt;
     use std::process::Output;
-    // use zero_kelvin::executor::MockCommandExecutor; // Not visible/available
+    use zero_kelvin::executor::MockCommandExecutor;
     use mockall::predicate::*;
-    use mockall::mock;
-
-    // Define the mock locally for the binary tests
-    mock! {
-        pub CommandExecutor {}
-        impl CommandExecutor for CommandExecutor {
-            fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;
-            fn run_interactive<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<std::process::ExitStatus>;
-            fn run_with_file_progress<'a>(
-                &self,
-                program: &str,
-                args: &[&'a str],
-                output_file: &std::path::Path,
-                progress_bar: &indicatif::ProgressBar,
-                poll_interval: std::time::Duration,
-            ) -> std::io::Result<Output>;
-            fn run_with_stdout_progress<'a>(
-                &self,
-                program: &str,
-                args: &[&'a str],
-                progress_bar: &indicatif::ProgressBar,
-            ) -> std::io::Result<Output>;
-            fn run_and_capture_error<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<(std::process::ExitStatus, String)>;
-        }
-    }
 
 
     #[test]
@@ -2315,5 +2372,99 @@ mod tests {
         };
         
         run(args, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_generate_mapper_name_sanitization() {
+        assert_eq!(
+            generate_mapper_name(&PathBuf::from("/path/to/backup.sqfs")),
+            "sq_backup_sqfs"
+        );
+        assert_eq!(
+            generate_mapper_name(&PathBuf::from("/path/to/my-data.sqfs_luks.img")),
+            "sq_my_data_sqfs_luks_img"
+        );
+        assert_eq!(
+            generate_mapper_name(&PathBuf::from("simple")),
+            "sq_simple"
+        );
+    }
+
+    #[test]
+    fn test_open_luks_container_success_first_try() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_run_interactive()
+            .withf(|prog, args| {
+                prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
+                    && args.contains(&"sq_test")
+            })
+            .times(1)
+            .returning(|_, _| Ok(std::process::ExitStatus::from_raw(0)));
+
+        let result = open_luks_container(
+            &mock,
+            &["sudo".to_string()],
+            "/path/to/image",
+            "sq_test",
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "sq_test");
+    }
+
+    #[test]
+    fn test_open_luks_container_retry_on_name_collision() {
+        let mut mock = MockCommandExecutor::new();
+        let call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let call_count_clone = call_count.clone();
+
+        mock.expect_run_interactive()
+            .withf(|prog, args| {
+                prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
+            })
+            .times(2)
+            .returning(move |_, _| {
+                let count = call_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if count == 0 {
+                    // First attempt: exit code 5 = name already exists
+                    // raw status 5*256 = 1280 on Linux
+                    Ok(std::process::ExitStatus::from_raw(5 << 8))
+                } else {
+                    // Second attempt: success
+                    Ok(std::process::ExitStatus::from_raw(0))
+                }
+            });
+
+        let result = open_luks_container(
+            &mock,
+            &["sudo".to_string()],
+            "/path/to/image",
+            "sq_test",
+        );
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "sq_test_2");
+    }
+
+    #[test]
+    fn test_open_luks_container_real_error_no_retry() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_run_interactive()
+            .withf(|prog, args| {
+                prog == "sudo" && args.contains(&"cryptsetup") && args.contains(&"open")
+            })
+            .times(1) // Should only try once
+            .returning(|_, _| {
+                // Exit code 2 = wrong password / no permission
+                Ok(std::process::ExitStatus::from_raw(2 << 8))
+            });
+
+        let result = open_luks_container(
+            &mock,
+            &["sudo".to_string()],
+            "/path/to/image",
+            "sq_test",
+        );
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("cryptsetup open failed"));
     }
 }

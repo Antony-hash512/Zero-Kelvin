@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::fs;
 use clap::Parser;
+use std::io;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Safely removes empty directories recursively")]
@@ -10,36 +11,116 @@ struct Args {
     path: PathBuf,
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> std::process::ExitCode {
     let args = Args::parse();
-    
+
     // Safety check: basic sanity check
     if !args.path.exists() {
-        return Ok(());
+        return std::process::ExitCode::SUCCESS;
     }
 
     // Atomic Operation:
     // 1. Scan: Ensure entire tree contains ONLY empty files (0 bytes) or directories.
     // 2. Delete: If scan ok, remove everything.
 
+    // Safety check: ensure no active mount points exist inside the target
+    if let Err(e) = check_no_active_mounts(&args.path) {
+        eprintln!("Operation aborted: {}", e);
+        return std::process::ExitCode::FAILURE;
+    }
+
     match scan_for_non_empty(&args.path) {
         Ok(_) => {
             // All clear.
-            if args.path.is_file() {
-                 fs::remove_file(&args.path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to remove file: {}", e)))?;
+            let result = if args.path.is_file() {
+                fs::remove_file(&args.path)
             } else {
-                 fs::remove_dir_all(&args.path).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to remove directory tree: {}", e)))?;
+                fs::remove_dir_all(&args.path)
+            };
+            if let Err(e) = result {
+                eprintln!("Failed to remove {:?}: {}", args.path, e);
+                return std::process::ExitCode::FAILURE;
             }
-            // println!("Removed: {:?}", args.path); // Quiet by default? Or log?
         },
         Err(e) => {
             // Found non-empty content or error. Abort.
             eprintln!("Operation aborted: {}", e);
-            std::process::exit(1);
+            return std::process::ExitCode::FAILURE;
         }
     }
-    
+
+    std::process::ExitCode::SUCCESS
+}
+
+/// Checks that no active mount points exist within the given path.
+/// Reads /proc/self/mountinfo (Linux-specific) to find all current mount points
+/// and verifies none of them are inside our target directory.
+/// This prevents catastrophic data loss if a bind mount from a crashed namespace
+/// is still active — remove_dir_all would follow the mount and delete real data.
+fn check_no_active_mounts(path: &Path) -> io::Result<()> {
+    let canonical = path.canonicalize().map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, format!("Cannot resolve path {:?}: {}", path, e))
+    })?;
+    let target_prefix = canonical.to_string_lossy().to_string();
+
+    let mountinfo = match fs::read_to_string("/proc/self/mountinfo") {
+        Ok(content) => content,
+        Err(_) => {
+            // If /proc is unavailable (container, exotic setup), skip the check
+            // but warn the user
+            eprintln!("Warning: Cannot read /proc/self/mountinfo. Skipping mount point safety check.");
+            return Ok(());
+        }
+    };
+
+    // mountinfo format (fields separated by spaces):
+    // 36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
+    // Field index 4 (0-based) is the mount point.
+    for line in mountinfo.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 5 {
+            continue;
+        }
+        let mount_point = unescape_mountinfo(fields[4]);
+        // Check if this mount point is inside our target directory (or is the target itself)
+        if mount_point.starts_with(&target_prefix) && mount_point.len() > target_prefix.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!(
+                    "Active mount point detected inside target: '{}'. \
+                     This likely means a bind mount from a previous 0k session is still active. \
+                     Please unmount it first (e.g., 'umount {}' or 'fusermount -u {}').",
+                    mount_point, mount_point, mount_point
+                ),
+            ));
+        }
+    }
+
     Ok(())
+}
+
+/// Unescapes octal escape sequences in mountinfo paths.
+/// The kernel escapes spaces as \040, tabs as \011, newlines as \012, etc.
+fn unescape_mountinfo(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            let d1 = bytes[i + 1];
+            let d2 = bytes[i + 2];
+            let d3 = bytes[i + 3];
+            if d1.is_ascii_digit() && d2.is_ascii_digit() && d3.is_ascii_digit() {
+                let val = (d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0');
+                result.push(val);
+                i += 4;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).into_owned()
 }
 
 /// Scans the path recursively. Returns Ok(()) if safe to delete (all empty).
@@ -102,4 +183,34 @@ mod tests {
     
     // We can't test main directly easily without extensive mocking or separate binary test.
     // The integration tests in BATS will cover the full binary behavior (exit codes etc).
+
+    #[test]
+    fn test_unescape_mountinfo_plain() {
+        assert_eq!(unescape_mountinfo("/tmp/0k-cache-1000"), "/tmp/0k-cache-1000");
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_space() {
+        // Space is encoded as \040
+        assert_eq!(unescape_mountinfo("/tmp/my\\040dir"), "/tmp/my dir");
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_tab() {
+        // Tab is encoded as \011
+        assert_eq!(unescape_mountinfo("/tmp/a\\011b"), "/tmp/a\tb");
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_no_octal() {
+        // Backslash not followed by 3 digits should be kept as-is
+        assert_eq!(unescape_mountinfo("/tmp/a\\bc"), "/tmp/a\\bc");
+    }
+
+    #[test]
+    fn test_check_no_active_mounts_clean_dir() {
+        let dir = tempdir().unwrap();
+        // No mounts inside a fresh temp dir
+        assert!(check_no_active_mounts(dir.path()).is_ok());
+    }
 }

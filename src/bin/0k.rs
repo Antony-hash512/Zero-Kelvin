@@ -167,15 +167,19 @@ use zero_kelvin::error::ZkError;
 use zero_kelvin::executor::RealSystem;
 use zero_kelvin::utils;
 
-fn main() {
+fn main() -> std::process::ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    if let Err(e) = run_app() {
-        if let Some(friendly) = e.friendly_message() {
-            eprintln!("Suggestion: {}", friendly);
+    match run_app() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(ZkError::CliExit(code)) => std::process::ExitCode::from(code as u8),
+        Err(e) => {
+            if let Some(friendly) = e.friendly_message() {
+                eprintln!("Suggestion: {}", friendly);
+            }
+            eprintln!("Error: {}", e);
+            std::process::ExitCode::FAILURE
         }
-        eprintln!("Error: {}", e);
-        std::process::exit(1);
     }
 }
 
@@ -200,7 +204,7 @@ fn run_app() -> Result<(), ZkError> {
                         eprintln!("Error: {}\n", e);
                         Args::build_command().print_help().unwrap_or_default();
                         println!();
-                        std::process::exit(2);
+                        return Err(ZkError::CliExit(2));
                     }
                 }
                 // 3. Command specific errors -> Subcommand Help
@@ -215,22 +219,30 @@ fn run_app() -> Result<(), ZkError> {
                             eprintln!("Error: {}\n", e);
                             sub_cmd.print_help().unwrap_or_default();
                             println!();
-                            std::process::exit(e.exit_code());
+                            return Err(ZkError::CliExit(e.exit_code()));
                         }
                     }
                 }
+                // --help, --version: clap prints output, return OK
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    let _ = e.print();
+                    return Ok(());
+                }
                 _ => {}
             }
-            e.exit();
+            // Fallback: print and return with clap's exit code
+            let code = e.exit_code();
+            let _ = e.print();
+            return Err(ZkError::CliExit(code));
         }
     };
 
     use clap::FromArgMatches;
-    let args = Args::from_arg_matches(&matches)
-        .map_err(|e| {
-            e.exit();
-        })
-        .unwrap();
+    let args = Args::from_arg_matches(&matches).map_err(|e| {
+        let code = e.exit_code();
+        let _ = e.print();
+        ZkError::CliExit(code)
+    })?;
 
     match args.command {
         Commands::Freeze {
@@ -247,6 +259,17 @@ fn run_app() -> Result<(), ZkError> {
             prefix,
         } => {
             let (targets, output) = resolve_freeze_args(args, read)?;
+
+            // Validate compression level
+            if let Some(level) = compression {
+                if level > 22 {
+                    return Err(ZkError::CompressionError(format!(
+                        "Invalid compression level: {}. Zstd supports levels 0-22 (0 = no compression).",
+                        level
+                    )));
+                }
+            }
+
             let executor = RealSystem;
 
             // If output is a directory, resolve to a full file path

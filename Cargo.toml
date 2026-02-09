@@ -67,6 +67,10 @@ rand = "0.9"
 fs2 = "0.4.3"
 walkdir = "2.5.0"
 libc = "0.2.180"
+mockall = { version = "0.14.0", optional = true }
+
+[features]
+testing = ["dep:mockall"]
 
 [dev-dependencies]
 # Инструменты для ТЕСТОВ

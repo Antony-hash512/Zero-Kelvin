@@ -8,7 +8,7 @@ use std::thread;
 use std::fs;
 
 /// Abstraction for running system commands.
-#[cfg_attr(test, mockall::automock)]
+#[cfg_attr(any(test, feature = "testing"), mockall::automock)]
 pub trait CommandExecutor {
     /// Runs a command synchronously and captures output.
     fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;

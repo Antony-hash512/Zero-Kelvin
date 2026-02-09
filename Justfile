@@ -58,7 +58,7 @@ bump:
 # Запуск всех юнит-тестов
 unit-tests:
     cargo check --locked || cargo update
-    cargo test --locked
+    cargo test --locked --features testing
 
 # Запуск всех интеграционных шелл-тестов
 shell-tests:

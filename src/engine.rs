@@ -15,9 +15,18 @@ use tempfile;
 pub fn prepare_staging(
     targets: &[PathBuf],
     dereference: bool,
+    staging_root_override: Option<&Path>,
 ) -> Result<(PathBuf, String, std::fs::File), ZkError> {
-    // 1. Resolve Staging Root: /tmp/0k-cache-<uid>
-    let staging_root = utils::get_0k_temp_dir()?;
+    // 1. Resolve Staging Root: /tmp/0k-cache-<uid> (or use override for testing)
+    let staging_root = match staging_root_override {
+        Some(root) => {
+            fs::create_dir_all(root).map_err(|e| {
+                ZkError::StagingError(format!("Failed to create staging root {:?}: {}", root, e))
+            })?;
+            root.to_path_buf()
+        }
+        None => utils::get_0k_temp_dir()?,
+    };
 
     // 2. Create unique build directory: /tmp/0k-cache-<uid>/build_<timestamp>_<random>
     let timestamp = std::time::SystemTime::now()
@@ -73,7 +82,10 @@ pub fn prepare_staging(
         fs::create_dir(&container_dir)?;
 
         // Create stub
-        let stub_path = container_dir.join(entry.name.as_ref().unwrap());
+        let entry_name = entry.name.as_ref().ok_or_else(|| {
+            ZkError::StagingError(format!("File entry {} has no name field", entry.id))
+        })?;
+        let stub_path = container_dir.join(entry_name);
 
         match entry.entry_type {
             crate::manifest::EntryType::Directory => {
@@ -110,9 +122,14 @@ pub fn prepare_staging(
     Ok((build_dir, payload_name, lock_file))
 }
 
+/// Maximum age (in seconds) for lockless staging directories before GC removes them.
+const GC_MAX_AGE_SECS: u64 = 24 * 3600; // 24 hours
+
 /// Tries to garbage collect old staging directories.
-/// Iterates over subdirectories in the cache. Tries to acquire non-blocking exclusive lock on .lock.
-/// If successful, it means the process is dead, so we delete the directory.
+/// Iterates over subdirectories in the cache:
+///   - With `.lock`: tries non-blocking flock. If acquired, the owner is dead → safe to remove.
+///   - Without `.lock`: checks directory age. If older than 24h → safe to remove.
+/// Before any deletion, verifies no active mount points exist inside (belt-and-suspenders).
 pub fn try_gc_staging() -> Result<(), ZkError> {
     let staging_root = utils::get_0k_temp_dir_path()?;
 
@@ -131,36 +148,108 @@ pub fn try_gc_staging() -> Result<(), ZkError> {
                     if lock_path.exists() {
                         if let Ok(lock_file) = fs::File::open(&lock_path) {
                             // Try LOCK_NB (Non-Blocking).
-                            // If lock_exclusive succeeds, it means no one else holds it.
+                            // If lock succeeds, the owning process is dead → safe to remove.
                             if lock_file.try_lock_exclusive().is_ok() {
-                                // Safe to delete
-                                // We hold the lock now, so no one else can claim it.
-                                // We can delete the directory.
-                                // Note: remove_dir_all might fail on .lock file on Windows because we hold open handle,
-                                // but on Linux unlink usually works on open files.
-                                // To be safe, we can drop lock_file before delete?
-                                // NO, if we drop, someone else might claim it (race).
-                                // But since we are deleting, new processes create NEW directories with new names,
-                                // they don't reuse old build_ dirs. So race is only with other GCs.
-                                // If we hold lock, other GCs fail try_lock.
-                                // So we are safe.
-                                if let Err(e) = fs::remove_dir_all(&path) {
-                                    warn!("GC: Failed to remove {:?}: {}", path, e);
-                                } else {
-                                    info!("GC: Removed stale staging dir {:?}", path);
-                                }
+                                gc_remove_dir(&path);
                             }
                         }
                     } else {
-                        // No .lock file? Maybe created before locking logic or broken.
-                        // Can we safely delete?
-                        // Let's rely on checking age or just skip for now to be safe.
+                        // No .lock file: created before locking was added, or crashed before lock creation.
+                        // Use age-based heuristic: if older than 24h, it's almost certainly stale.
+                        if is_dir_older_than(&path, GC_MAX_AGE_SECS) {
+                            gc_remove_dir(&path);
+                        }
                     }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Checks if a directory's mtime is older than `max_age_secs` seconds.
+fn is_dir_older_than(path: &Path, max_age_secs: u64) -> bool {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let modified = match meta.modified() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    age.as_secs() > max_age_secs
+}
+
+/// Checks /proc/self/mountinfo for active mount points inside the given directory.
+/// Returns true if active mounts are found (unsafe to delete).
+fn has_active_mounts_inside(path: &Path) -> bool {
+    let canonical = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return false, // Can't resolve → assume safe
+    };
+    let prefix = canonical.to_string_lossy().to_string();
+
+    let mountinfo = match fs::read_to_string("/proc/self/mountinfo") {
+        Ok(content) => content,
+        Err(_) => return false, // Can't read → assume safe (not Linux or restricted)
+    };
+
+    for line in mountinfo.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 5 {
+            continue;
+        }
+        // Field 4 (0-based) is the mount point. Unescape octal sequences.
+        let mount_point = unescape_mountinfo_octal(fields[4]);
+        if mount_point.starts_with(&prefix) && mount_point.len() > prefix.len() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Unescape octal sequences in /proc/self/mountinfo paths (e.g., \040 → space).
+fn unescape_mountinfo_octal(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            let d1 = bytes[i + 1];
+            let d2 = bytes[i + 2];
+            let d3 = bytes[i + 3];
+            if d1.is_ascii_digit() && d2.is_ascii_digit() && d3.is_ascii_digit() {
+                let val = (d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0');
+                result.push(val);
+                i += 4;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).into_owned()
+}
+
+/// Safely remove a GC candidate directory.
+/// Checks for active mount points first to prevent catastrophic data loss.
+fn gc_remove_dir(path: &Path) {
+    if has_active_mounts_inside(path) {
+        warn!(
+            "GC: Skipping {:?} — active mount points detected inside. \
+             This may indicate a stale bind mount from a crashed session.",
+            path
+        );
+        return;
+    }
+    if let Err(e) = fs::remove_dir_all(path) {
+        warn!("GC: Failed to remove {:?}: {}", path, e);
+    } else {
+        info!("GC: Removed stale staging dir {:?}", path);
+    }
 }
 
 fn get_hostname() -> Result<String, ZkError> {
@@ -264,6 +353,17 @@ pub fn check<E: CommandExecutor>(
     let f = fs::File::open(&manifest_path).map_err(ZkError::IoError)?;
     let manifest: Manifest = serde_yaml::from_reader(f).map_err(ZkError::ManifestError)?;
     manifest.validate()?;
+
+    // Hostname check: warn if archive was created on a different host
+    if let Ok(current_host) = get_hostname() {
+        if manifest.metadata.host != current_host {
+            eprintln!(
+                "Warning: This archive was created on host '{}', but current host is '{}'.\n\
+                 Restore paths may not exist or may differ on this system.",
+                manifest.metadata.host, current_host
+            );
+        }
+    }
 
     // 3. Perform Check
     println!("Checking {} files from archive...", manifest.files.len());
@@ -454,16 +554,16 @@ fn check_item(
         let live_target = fs::read_link(live_path);
         let mount_target = fs::read_link(mount_path);
 
-        if live_target.is_err()
-            || mount_target.is_err()
-            || live_target.as_ref().unwrap() != mount_target.as_ref().unwrap()
-        {
-            println!(
-                "MISMATCH (Link Target): {} ({:?} vs {:?})",
-                display_name, live_target, mount_target
-            );
-            *stats_mismatch += 1;
-            return Ok(());
+        match (&live_target, &mount_target) {
+            (Ok(l), Ok(m)) if l == m => {} // Symlink targets match
+            _ => {
+                println!(
+                    "MISMATCH (Link Target): {} ({:?} vs {:?})",
+                    display_name, live_target, mount_target
+                );
+                *stats_mismatch += 1;
+                return Ok(());
+            }
         }
     } else {
         if live_meta.len() != mount_meta.len() {
@@ -536,11 +636,9 @@ fn check_item(
 }
 
 fn compare_files(p1: &Path, p2: &Path) -> Result<bool, ZkError> {
-    use std::io::Read;
     let f1 = fs::File::open(p1).map_err(ZkError::IoError)?;
     let f2 = fs::File::open(p2).map_err(ZkError::IoError)?;
 
-    // Use BufReader logic
     let mut b1 = std::io::BufReader::new(f1);
     let mut b2 = std::io::BufReader::new(f2);
 
@@ -548,20 +646,37 @@ fn compare_files(p1: &Path, p2: &Path) -> Result<bool, ZkError> {
     let mut buf2 = [0; 8192];
 
     loop {
-        let n1 = b1.read(&mut buf1)?;
-        let n2 = b2.read(&mut buf2)?;
+        let n1 = read_full(&mut b1, &mut buf1)?;
+        let n2 = read_full(&mut b2, &mut buf2)?;
 
         if n1 != n2 {
             return Ok(false);
         }
         if n1 == 0 {
             return Ok(true);
-        } // EOF reached for both
+        }
 
         if buf1[..n1] != buf2[..n2] {
             return Ok(false);
         }
     }
+}
+
+/// Reads up to buf.len() bytes, retrying on short reads until the buffer is full or EOF.
+/// Unlike a single `read()` call, this prevents false mismatches when comparing files
+/// across different filesystems (e.g., local disk vs squashfuse FUSE mount), where
+/// the FUSE driver may return fewer bytes than requested even for regular files.
+fn read_full(reader: &mut impl std::io::Read, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+    let mut total = 0;
+    while total < buf.len() {
+        match reader.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
 }
 
 pub fn unfreeze<E: CommandExecutor>(
@@ -792,40 +907,60 @@ fn restore_from_mount<E: CommandExecutor>(
 
         let rsync_status = executor.run_interactive("rsync", &args);
 
-        let need_sudo = if let Ok(s) = rsync_status {
-            !s.success()
-        } else {
-            true
-        };
+        let rsync_ok = matches!(&rsync_status, Ok(s) if s.success());
+        let rsync_exit_code = rsync_status.as_ref().ok().and_then(|s| s.code());
 
-        if need_sudo
-            || (manifest.metadata.privilege_mode == Some(PrivilegeMode::Root)
-                && !utils::is_root().unwrap_or(false))
-        {
-            if let Some(runner) =
-                utils::check_root_or_get_runner("Restoration requires elevated privileges")?
-            {
-                println!("Retrying with {}", runner);
+        // Determine if elevation is needed:
+        // 1. Archive was created with root privileges and we're not root
+        // 2. rsync failed with a permission-related exit code (23=partial transfer, 11=file I/O)
+        let privilege_mode_requires_root =
+            manifest.metadata.privilege_mode == Some(PrivilegeMode::Root)
+                && !utils::is_root().unwrap_or(false);
 
-                let mut sudo_args = vec!["rsync", "-a", "--info=progress2", &final_src, dest_str];
-                for flag in &extra_rsync_flags {
-                    sudo_args.insert(2, flag);
-                }
+        if rsync_ok && !privilege_mode_requires_root {
+            // Success without elevation needed
+        } else if !rsync_ok {
+            // rsync failed — only retry with sudo for permission-related errors
+            let is_likely_permission_error = matches!(rsync_exit_code, Some(23) | Some(11));
 
-                let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
-                if !status.success() {
+            if privilege_mode_requires_root || is_likely_permission_error {
+                if let Some(runner) =
+                    utils::check_root_or_get_runner("Restoration requires elevated privileges")?
+                {
+                    println!("Retrying with {}", runner);
+
+                    let mut sudo_args =
+                        vec!["rsync", "-a", "--info=progress2", &final_src, dest_str];
+                    for flag in &extra_rsync_flags {
+                        sudo_args.insert(2, flag);
+                    }
+
+                    let status = executor.run_interactive(runner.as_str(), &sudo_args)?;
+                    if !status.success() {
+                        return Err(ZkError::OperationFailed(format!(
+                            "Failed to restore {:?}: rsync failed even with sudo",
+                            dest_path
+                        )));
+                    }
+                } else {
                     return Err(ZkError::OperationFailed(format!(
-                        "Failed to restore {:?}: rsync failed even with sudo",
+                        "Failed to restore {:?}",
                         dest_path
                     )));
                 }
             } else {
-                // Already tried as root or no runner, and failed
+                // Not a permission error — report failure directly without sudo retry
                 return Err(ZkError::OperationFailed(format!(
-                    "Failed to restore {:?}",
-                    dest_path
+                    "rsync failed (exit code: {:?}) while restoring {:?}",
+                    rsync_exit_code, dest_path
                 )));
             }
+        } else {
+            // rsync succeeded but archive requires root — warn about potential ownership issues
+            eprintln!(
+                "Warning: Archive was created with root privileges. \
+                 File ownership may not be fully preserved without elevation."
+            );
         }
     }
 
@@ -847,7 +982,7 @@ pub fn freeze<E: CommandExecutor>(
 
     // 1. Prepare Staging
     // _lock must be kept in scope to maintain the flock until we are done (or until cleanup)
-    let (build_dir, payload_name, _lock) = prepare_staging(targets, options.dereference)?;
+    let (build_dir, payload_name, _lock) = prepare_staging(targets, options.dereference, None)?;
 
     // 2. Read Manifest
     let payload_dir = build_dir.join(&payload_name);
@@ -908,6 +1043,53 @@ pub fn freeze<E: CommandExecutor>(
             "Freeze process failed: {}",
             stderr
         )));
+    }
+
+    // Post-freeze verification: ensure the output file is valid
+    if !options.output.exists() {
+        return Err(ZkError::OperationFailed(
+            "Post-freeze verification failed: output file does not exist".to_string(),
+        ));
+    }
+    let output_size = fs::metadata(&options.output)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if output_size == 0 {
+        return Err(ZkError::OperationFailed(
+            "Post-freeze verification failed: output file is empty".to_string(),
+        ));
+    }
+
+    if !options.encrypt {
+        // Plain archive: verify it is a valid SquashFS image
+        if let Some(output_str) = options.output.to_str() {
+            match executor.run("unsquashfs", &["-s", output_str]) {
+                Ok(verify_out) if verify_out.status.success() => {
+                    info!("Post-freeze verification: archive is a valid SquashFS image");
+                }
+                Ok(verify_out) => {
+                    let verify_err = String::from_utf8_lossy(&verify_out.stderr);
+                    return Err(ZkError::OperationFailed(format!(
+                        "Post-freeze verification failed: output is not a valid SquashFS image: {}",
+                        verify_err.trim()
+                    )));
+                }
+                Err(e) => {
+                    warn!(
+                        "Post-freeze verification skipped (unsquashfs not available?): {}",
+                        e
+                    );
+                }
+            }
+        }
+    } else {
+        // Encrypted archive: verify it is a valid LUKS container
+        if !utils::is_luks_image(&options.output, executor) {
+            return Err(ZkError::OperationFailed(
+                "Post-freeze verification failed: output is not a valid LUKS container".to_string(),
+            ));
+        }
+        info!("Post-freeze verification: output is a valid LUKS container");
     }
 
     // Cleanup Staging Area
@@ -1008,13 +1190,7 @@ mod tests {
 
     #[test]
     fn test_prepare_staging() {
-        // Mock XDG_CACHE_HOME by setting environment variable
         let temp_cache = tempdir().unwrap();
-
-        // Since we are adding ONLY this test to this file, it's fine.
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", temp_cache.path());
-        }
 
         let target_dir = tempdir().unwrap();
         let file_target = target_dir.path().join("data.txt");
@@ -1024,8 +1200,8 @@ mod tests {
 
         let targets = vec![file_target.clone(), dir_target.clone()];
 
-        // Return tuple now includes payload_name
-        let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
+        let (build_dir, payload_name, _lock) =
+            prepare_staging(&targets, false, Some(temp_cache.path())).unwrap();
 
         assert_eq!(payload_name, "payload"); // Always "payload"
 
@@ -1073,11 +1249,7 @@ mod tests {
     #[test]
     fn test_prepare_staging_symlinks() {
         use std::os::unix::fs::symlink;
-        // Mock XDG_CACHE_HOME by setting environment variable
         let temp_cache = tempdir().unwrap();
-        unsafe {
-            std::env::set_var("XDG_CACHE_HOME", temp_cache.path());
-        }
 
         let target_dir = tempdir().unwrap();
         let target_file = target_dir.path().join("real_file");
@@ -1088,7 +1260,8 @@ mod tests {
 
         // Test 1: No Dereference (default) -> Should preserve symlink
         let targets = vec![symlink_path.clone()];
-        let (build_dir, payload_name, _lock) = prepare_staging(&targets, false).unwrap();
+        let (build_dir, payload_name, _lock) =
+            prepare_staging(&targets, false, Some(temp_cache.path())).unwrap();
 
         let payload_dir = build_dir.join(&payload_name);
         let link_in_staging = payload_dir.join("to_restore/1/my_link");
@@ -1103,7 +1276,8 @@ mod tests {
         drop(_lock);
 
         // Test 2: Dereference -> Should be a file stub
-        let (build_dir_2, payload_name_2, _lock_2) = prepare_staging(&targets, true).unwrap();
+        let (build_dir_2, payload_name_2, _lock_2) =
+            prepare_staging(&targets, true, Some(temp_cache.path())).unwrap();
         let payload_dir_2 = build_dir_2.join(&payload_name_2);
         let stub_in_staging = payload_dir_2.join("to_restore/1/my_link");
 
@@ -1321,5 +1495,148 @@ mod tests {
         };
 
         restore_from_mount(mount_path, &options, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_compare_files_identical() {
+        let dir = tempdir().unwrap();
+        let f1 = dir.path().join("a.bin");
+        let f2 = dir.path().join("b.bin");
+
+        // Create identical files with known content
+        let data: Vec<u8> = (0..20000).map(|i| (i % 256) as u8).collect();
+        fs::write(&f1, &data).unwrap();
+        fs::write(&f2, &data).unwrap();
+
+        assert!(compare_files(&f1, &f2).unwrap(), "Identical files should match");
+    }
+
+    #[test]
+    fn test_compare_files_different_size() {
+        let dir = tempdir().unwrap();
+        let f1 = dir.path().join("a.bin");
+        let f2 = dir.path().join("b.bin");
+
+        fs::write(&f1, b"hello").unwrap();
+        fs::write(&f2, b"hello world").unwrap();
+
+        assert!(!compare_files(&f1, &f2).unwrap(), "Different-size files should not match");
+    }
+
+    #[test]
+    fn test_compare_files_different_content() {
+        let dir = tempdir().unwrap();
+        let f1 = dir.path().join("a.bin");
+        let f2 = dir.path().join("b.bin");
+
+        fs::write(&f1, b"hello").unwrap();
+        fs::write(&f2, b"world").unwrap();
+
+        assert!(!compare_files(&f1, &f2).unwrap(), "Different-content files should not match");
+    }
+
+    #[test]
+    fn test_compare_files_empty() {
+        let dir = tempdir().unwrap();
+        let f1 = dir.path().join("a.bin");
+        let f2 = dir.path().join("b.bin");
+
+        fs::write(&f1, b"").unwrap();
+        fs::write(&f2, b"").unwrap();
+
+        assert!(compare_files(&f1, &f2).unwrap(), "Empty files should match");
+    }
+
+    #[test]
+    fn test_read_full_fills_buffer() {
+        use std::io::Cursor;
+        let data = vec![42u8; 16384]; // Larger than buffer size (8192)
+        let mut reader = Cursor::new(&data);
+        let mut buf = [0u8; 8192];
+        let n = read_full(&mut reader, &mut buf).unwrap();
+        assert_eq!(n, 8192);
+        assert!(buf.iter().all(|&b| b == 42));
+    }
+
+    // --- GC helper tests ---
+
+    #[test]
+    fn test_unescape_mountinfo_octal_plain() {
+        assert_eq!(unescape_mountinfo_octal("/mnt/data"), "/mnt/data");
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_octal_space() {
+        // \040 is octal for space (32)
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/my\\040data"),
+            "/mnt/my data"
+        );
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_octal_tab() {
+        // \011 is octal for tab (9)
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/my\\011data"),
+            "/mnt/my\tdata"
+        );
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_octal_backslash() {
+        // \134 is octal for backslash (92)
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/my\\134data"),
+            "/mnt/my\\data"
+        );
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_octal_trailing_backslash() {
+        // Trailing backslash without 3 digits — should be kept as-is
+        assert_eq!(unescape_mountinfo_octal("/mnt/data\\"), "/mnt/data\\");
+        assert_eq!(unescape_mountinfo_octal("/mnt/data\\0"), "/mnt/data\\0");
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/data\\04"),
+            "/mnt/data\\04"
+        );
+    }
+
+    #[test]
+    fn test_is_dir_older_than_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Just created — should NOT be older than 1 second
+        assert!(!is_dir_older_than(tmp.path(), 1));
+    }
+
+    #[test]
+    fn test_is_dir_older_than_large_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A freshly created dir is never older than 100000 seconds
+        assert!(!is_dir_older_than(tmp.path(), 100_000));
+    }
+
+    #[test]
+    fn test_is_dir_older_than_nonexistent() {
+        assert!(!is_dir_older_than(Path::new("/nonexistent_path_12345"), 0));
+    }
+
+    #[test]
+    fn test_has_active_mounts_inside_clean_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A fresh temp dir should have no mounts inside
+        assert!(!has_active_mounts_inside(tmp.path()));
+    }
+
+    #[test]
+    fn test_gc_remove_dir_removes_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("build_test_gc");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("file.txt"), "data").unwrap();
+        assert!(target.exists());
+        gc_remove_dir(&target);
+        assert!(!target.exists());
     }
 }
