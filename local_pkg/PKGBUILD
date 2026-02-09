@@ -26,6 +26,7 @@ prepare() {
     # Копируем нужные каталоги и файлы
     cp -r "$_projectdir/src" "$srcdir/$pkgname/"
     cp -r "$_projectdir/tests" "$srcdir/$pkgname/"
+    cp -r "$_projectdir/man" "$srcdir/$pkgname/"
 
     cp "$_projectdir/Cargo.toml" "$srcdir/$pkgname/"
     cp "$_projectdir/Cargo.lock" "$srcdir/$pkgname/"
@@ -72,4 +73,8 @@ package() {
     # Установка лицензии и документации
     install -Dm644 LICENSE.GPLv3 "$pkgdir/usr/share/licenses/$pkgname/LICENSE.GPLv3"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    # Установка man-страниц
+    install -Dm644 man/0k.1 "$pkgdir/usr/share/man/man1/0k.1"
+    install -Dm644 man/0k-core.1 "$pkgdir/usr/share/man/man1/0k-core.1"
 }
