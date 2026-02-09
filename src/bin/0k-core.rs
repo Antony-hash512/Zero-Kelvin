@@ -1552,7 +1552,15 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                     if let Some(runner) = zero_kelvin::utils::check_root_or_get_runner(
                         "Mounting LUKS archives requires root privileges. Retrying with elevation...",
                     )? {
-                        return zero_kelvin::utils::re_exec_with_runner(&runner);
+                        // RE-EXEC with EXPLICIT ARGUMENTS
+                        // We must pass the resolved mount point (owned by user) to the root process
+                        // so it doesn't auto-generate a new one in /tmp/0k-cache-0/.
+                        let args = vec![
+                            "mount".to_string(),
+                            image.to_string_lossy().into_owned(),
+                            target_mount_point.to_string_lossy().into_owned(),
+                        ];
+                        return zero_kelvin::utils::re_exec_with_runner_custom_args(&runner, &args);
                     }
                 }
                 println!("Detected LUKS container. Opening encrypted image...");

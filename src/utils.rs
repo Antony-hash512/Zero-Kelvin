@@ -148,6 +148,27 @@ pub fn re_exec_with_runner(runner: &str) -> Result<(), ZkError> {
     )))
 }
 
+pub fn re_exec_with_runner_custom_args(runner: &str, new_args: &[String]) -> Result<(), ZkError> {
+    use std::os::unix::process::CommandExt;
+
+    // We assume the first argument (binary path) remains the same from env::args().
+    // We replace the rest with new_args.
+    
+    let current_args: Vec<String> = std::env::args().collect();
+    let program = &current_args[0];
+
+    // Construct command: runner program new_args...
+    let err = std::process::Command::new(runner)
+        .arg(program)
+        .args(new_args)
+        .exec();
+
+    Err(ZkError::OperationFailed(format!(
+        "Failed to re-execute with {} and custom args: {}",
+        runner, err
+    )))
+}
+
 // Helpers for testing (not exposed)
 fn parse_uid_from_status(content: &str) -> Result<u32, ZkError> {
     for line in content.lines() {
