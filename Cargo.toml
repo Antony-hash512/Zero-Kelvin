@@ -67,6 +67,7 @@ rand = "0.9"
 fs2 = "0.4.3"
 walkdir = "2.5.0"
 libc = "0.2.180"
+nix = { version = "0.30", features = ["user"] }
 mockall = { version = "0.14.0", optional = true }
 
 [features]

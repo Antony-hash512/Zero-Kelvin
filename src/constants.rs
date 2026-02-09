@@ -15,3 +15,15 @@ pub const LUKS_SAFETY_BUFFER: u64 = 128 * 1024 * 1024; // 128MB safety buffer to
 /// Whitelist of allowed privilege escalation commands.
 /// Only these binaries are accepted via ROOT_CMD env var or config file.
 pub const ALLOWED_ROOT_CMDS: &[&str] = &["sudo", "doas", "sudo-rs", "run0", "pkexec", "please"];
+
+/// Prefix for LUKS mapper device names in /dev/mapper/
+pub const LUKS_MAPPER_PREFIX: &str = "sq_";
+
+/// Maximum number of processes to scan in /proc during umount (DoS protection)
+pub const PROC_SCAN_LIMIT: usize = 10000;
+
+/// Maximum size of manifest file (list.yaml) in bytes (10MB, YAML-bomb protection)
+pub const MANIFEST_MAX_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Directory for application logs under XDG_STATE_HOME
+pub const LOG_DIR_NAME: &str = "logs";

@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rand::Rng;
-use zero_kelvin::constants::{ALLOWED_ROOT_CMDS, DEFAULT_ZSTD_COMPRESSION, LUKS_HEADER_SIZE, LUKS_SAFETY_BUFFER};
+use zero_kelvin::constants::{
+    ALLOWED_ROOT_CMDS, DEFAULT_ZSTD_COMPRESSION, LUKS_HEADER_SIZE, LUKS_SAFETY_BUFFER,
+    LUKS_MAPPER_PREFIX, PROC_SCAN_LIMIT,
+};
 use zero_kelvin::executor::{CommandExecutor, RealSystem};
 
 /// Global path for cleanup on interrupt (SIGINT/SIGTERM)
@@ -77,7 +80,7 @@ fn load_root_cmd_config() -> Option<RootCmdConfig> {
         return None;
     }
 
-    let uid = unsafe { libc::getuid() };
+    let uid = nix::unistd::getuid().as_raw();
     if meta.uid() != uid {
         eprintln!(
             "Warning: config {:?} is owned by uid {} (expected {}), ignoring.",
@@ -755,7 +758,7 @@ fn generate_mapper_name(image_path: &PathBuf) -> String {
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect();
 
-    format!("sq_{}", sanitized)
+    format!("{}{}", LUKS_MAPPER_PREFIX, sanitized)
 }
 
 /// Open a LUKS container with automatic retry on mapper name collision.
@@ -1061,6 +1064,8 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                 if !final_output.exists() || (!overwrite_files && !overwrite_luks_content) {
                     // Original Creation Logic
                     println!("Initializing LUKS container...");
+                    eprintln!("Note: LUKS has built-in rate limiting. After several incorrect password attempts,");
+                    eprintln!("      there will be increasing delays between attempts (up to 60 seconds).");
                     // Construct command: [sudo] cryptsetup luksFormat -q output
                     let mut luks_args = root_cmd.clone();
                     luks_args.extend(vec!["cryptsetup".to_string(), "luksFormat".to_string(), "-q".to_string(), output_str.to_string()]);
@@ -1605,6 +1610,8 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                 
                 // Open LUKS container (with atomic retry on name collision)
                 println!("Opening encrypted container (password required)...");
+                eprintln!("Note: LUKS has built-in rate limiting. After several incorrect password attempts,");
+                eprintln!("      there will be increasing delays between attempts (up to 60 seconds).");
                 let image_str = image.to_str().ok_or(ZkError::InvalidPath(image.clone()))?;
                 let mapper_name = open_luks_container(
                     executor,
@@ -1683,10 +1690,17 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                     eprintln!("DEBUG: Scanning processes for image: '{}'", abs_path_str);
                 }
 
-                // Iterate over /proc
+                // Iterate over /proc (with limit for DoS protection)
                 let proc_dir = fs::read_dir("/proc").map_err(|e| ZkError::IoError(e))?;
+                let mut scan_count = 0;
                 
                 for entry in proc_dir {
+                    // DoS protection: limit number of processes scanned
+                    scan_count += 1;
+                    if scan_count > PROC_SCAN_LIMIT {
+                        eprintln!("Warning: /proc scan limit ({}) reached, some mounts may not be found", PROC_SCAN_LIMIT);
+                        break;
+                    }
                     if let Ok(entry) = entry {
                         let file_name = entry.file_name();
                         let file_name_str = file_name.to_str().unwrap_or("");
@@ -1784,8 +1798,9 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                                                 let source = parts[0];
                                                 let mount_point = &zero_kelvin::engine::unescape_mountinfo_octal(parts[1]);
                                                 
-                                                // Check if it's a sq_* mapper
-                                                if source.starts_with("/dev/mapper/sq_") {
+                                                // Check if it's a LUKS mapper (uses configured prefix)
+                                                let mapper_prefix_path = format!("/dev/mapper/{}", LUKS_MAPPER_PREFIX);
+                                                if source.starts_with(&mapper_prefix_path) {
                                                     // Verify this mapper uses our loop device
                                                     // dmsetup table sq_* shows the backing device
                                                     let mapper_name = source.trim_start_matches("/dev/mapper/");
@@ -1851,8 +1866,9 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
 
                 
                 // Determine unmount method based on source device
+                let mapper_prefix_path = format!("/dev/mapper/{}", LUKS_MAPPER_PREFIX);
                 let is_luks_mapper = source_device.as_ref()
-                    .map(|dev| dev.starts_with("/dev/mapper/sq_"))
+                    .map(|dev| dev.starts_with(&mapper_prefix_path))
                     .unwrap_or(false);
                 
                 if is_luks_mapper {

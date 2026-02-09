@@ -302,10 +302,12 @@ pub fn ensure_read_permissions(paths: &[PathBuf]) -> Result<(), ZkError> {
     Ok(())
 }
 
-/// Returns the path to /tmp/0k-cache-<uid> without ensuring it exists.
+/// Returns the path to $TMPDIR/0k-cache-<uid> (or /tmp/0k-cache-<uid> if TMPDIR not set)
+/// without ensuring it exists.
 pub fn get_0k_temp_dir_path() -> Result<PathBuf, ZkError> {
     let uid = get_current_uid()?;
-    Ok(PathBuf::from(format!("/tmp/0k-cache-{}", uid)))
+    let tmp_base = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    Ok(PathBuf::from(format!("{}/0k-cache-{}", tmp_base, uid)))
 }
 
 /// Returns the path to /tmp/0k-cache-<uid> and ensures it exists with 0700 permissions.
@@ -365,6 +367,32 @@ pub fn get_0k_temp_dir() -> Result<PathBuf, ZkError> {
     }
 
     Ok(path)
+}
+
+/// Unescape octal sequences in /proc/self/mountinfo and /proc/mounts paths (e.g., \040 → space).
+pub fn unescape_mountinfo_octal(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() {
+            let d1 = bytes[i + 1];
+            let d2 = bytes[i + 2];
+            let d3 = bytes[i + 3];
+            if (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+                && (b'0'..=b'7').contains(&d3)
+            {
+                let val = (d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0');
+                result.push(val);
+                i += 4;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).into_owned()
 }
 
 /// Expands a tilde (~) at the start of a path to the user's HOME directory.

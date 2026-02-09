@@ -161,4 +161,4 @@
 - [ ] См. раздел "временные решения" в GEMINI.md
 - [ ] Добавить генерацию man страниц через clap_mangen и build.rs
 - [ ] Упрядочить хаос с прогресс-барами
-- [ ] **Логгирование и Обсервабельность**: Внедрение `tracing` + `tracing-appender` для ротации логов в `~/.local/state/zero-kelvin-stazis/logs/`.
+- [ ] **Логгирование и Обсервабельность**: Внедрение `tracing` + `tracing-appender` для ротации логов в `~/.local/state/zero-kelvin/logs/`.

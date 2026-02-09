@@ -53,6 +53,7 @@ impl Args {
       --overwrite           Overwrite existing files.
       --skip-existing       Skip files that already exist.
       --force-unfreeze      Force unfreeze even if hostname mismatches.
+      --verify              Verify archive integrity before restoring.
 
   check <ARCHIVE_PATH> [OPTIONS]
     Verify archive integrity against the live system.
@@ -150,6 +151,10 @@ pub enum Commands {
         /// Skip hostname mismatch check (non-interactive mode)
         #[arg(long)]
         force_unfreeze: bool,
+        
+        /// Verify archive integrity before restoring (pre-flight check)
+        #[arg(long)]
+        verify: bool,
     },
     /// Check integrity of an archive against the original files
     Check {
@@ -332,11 +337,13 @@ fn run_app() -> Result<(), ZkError> {
             overwrite,
             skip_existing,
             force_unfreeze,
+            verify,
         } => {
             let options = UnfreezeOptions {
                 overwrite,
                 skip_existing,
                 force_unfreeze,
+                verify,
             };
             let executor = RealSystem;
             // engine::unfreeze(&archive_path, &options, &executor)?;
