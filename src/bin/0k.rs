@@ -40,14 +40,19 @@ impl Args {
       -e, --encrypt         Encrypt the archive using LUKS (via 0k-core).
       -r, --read <FILE>     Read list of targets from a file.
       -c, --compression N   Zstd compression level (default: {1}) 0 = no compression.
+          --no-progress     Disable progress bar.
           --prefix <NAME>   Prefix for auto-generated filename
                             (when ARCHIVE_PATH is a directory).
                             If omitted, you will be prompted interactively.
 
-  unfreeze <ARCHIVE_PATH>
+  unfreeze <ARCHIVE_PATH> [OPTIONS]
     Restore data from a frozen archive to its original locations.
     Arguments:
       ARCHIVE_PATH          Path to the .sqfs archive to restore.
+    Options:
+      --overwrite           Overwrite existing files.
+      --skip-existing       Skip files that already exist.
+      --force-unfreeze      Force unfreeze even if hostname mismatches.
 
   check <ARCHIVE_PATH> [OPTIONS]
     Verify archive integrity against the live system.
@@ -58,6 +63,10 @@ impl Args {
       --delete              Delete local files if they match the archive (Destructive!).
       -D, --force-delete    Modifier for --delete: also delete files newer than archive.
                             (Useful for cleaning up already restored/unfrozen files).
+
+Full help for a specific command can be obtained via:
+  zero-kelvin <command> --help
+  0k help <command>
 ",
             BANNER, DEFAULT_ZSTD_COMPRESSION
         ))
