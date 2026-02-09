@@ -183,10 +183,12 @@ use zero_kelvin::constants::DEFAULT_ZSTD_COMPRESSION;
 use zero_kelvin::engine::{self, FreezeOptions, UnfreezeOptions};
 use zero_kelvin::error::ZkError;
 use zero_kelvin::executor::RealSystem;
+use zero_kelvin::logging;
 use zero_kelvin::utils;
 
 fn main() -> std::process::ExitCode {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Initialize tracing with file rotation (guard must be kept alive)
+    let _log_guard = logging::init_logging();
 
     match run_app() {
         Ok(()) => std::process::ExitCode::SUCCESS,

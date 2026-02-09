@@ -61,6 +61,9 @@ infer = "0.19"
 # 7. Логирование (вместо echo)
 log = "0.4"
 env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # 8. Генерация случайных чисел (для разных целей)
 rand = "0.9"

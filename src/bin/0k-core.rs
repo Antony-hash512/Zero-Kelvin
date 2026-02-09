@@ -2094,11 +2094,12 @@ mod tests {
             .withf(move |program, args: &[&str]| {
                  let is_runner = ["sudo", "doas", "run0"].contains(&program);
                  let is_direct = program == "mksquashfs";
+                 let mapper_prefix = format!("/dev/mapper/{}", LUKS_MAPPER_PREFIX);
 
                  if is_direct {
-                     args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
+                     args.iter().any(|s| s.starts_with(&mapper_prefix))
                  } else if is_runner {
-                     args.iter().any(|s| s.starts_with("/dev/mapper/sq_"))
+                     args.iter().any(|s| s.starts_with(&mapper_prefix))
                  } else {
                      false
                  }
@@ -2403,15 +2404,15 @@ mod tests {
     fn test_generate_mapper_name_sanitization() {
         assert_eq!(
             generate_mapper_name(&PathBuf::from("/path/to/backup.sqfs")),
-            "sq_backup_sqfs"
+            "zrklvbackup_sqfs"
         );
         assert_eq!(
             generate_mapper_name(&PathBuf::from("/path/to/my-data.sqfs_luks.img")),
-            "sq_my_data_sqfs_luks_img"
+            "zrklvmy_data_sqfs_luks_img"
         );
         assert_eq!(
             generate_mapper_name(&PathBuf::from("simple")),
-            "sq_simple"
+            "zrklvsimple"
         );
     }
 
