@@ -9,11 +9,11 @@
 
 ## Executive Summary
 
-17 issues were identified in the initial audit. Of these:
-- **16 fixed** (issues 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 17)
+17 issues were identified in the initial audit, and 8 additional issues (R1-R8) were found during the post-fix re-audit. All have been resolved:
+- **16 initial + 8 re-audit = 24 fixed**
 - **1 informational / deferred** (issues 13, 15)
 
-All 70 unit tests pass after the fixes. No regressions introduced.
+All 71 unit tests pass. Zero `.unwrap()`/`.expect()` in production code. Zero `process::exit()` calls.
 
 ---
 
@@ -514,17 +514,67 @@ The generated shell script is written to `build_dir/freeze.sh` before being pass
 
 ---
 
+## Re-audit (Post-fix Review)
+
+A second pass identified 8 additional issues (including regressions from the initial fixes):
+
+| # | Severity | Status | Description |
+|---|----------|--------|-------------|
+| R1 | Critical | **Fixed** | `unescape_mountinfo_octal` accepted digits 8-9 (not valid octal), causing `u8` overflow/panic |
+| R2 | Medium | **Fixed** | `has_active_mounts_inside` returned `false` on error → could allow GC deletion of mounted dirs |
+| R3 | Medium | **Fixed** | `.unwrap()` in `executor.rs:83` (`child.stderr.take()`) — policy violation |
+| R4 | Medium | **Fixed** | `.expect()` in `executor.rs:178` (`Regex::new`) — policy violation |
+| R5 | Low | **Fixed** | `.unwrap()` in `0k.rs:441` (`args.pop()`) — policy violation |
+| R6 | Low | **Fixed** | `CliExit(i32)` → `u8` truncation: changed to `CliExit(u8)` |
+| R7 | Low | **Fixed** | `unwrap_or("unknown")` in `engine.rs` silently constructed wrong paths |
+| R8 | Low | **Fixed** | `/proc/mounts` parsing in `0k-core.rs` didn't decode octal escapes (paths with spaces) |
+
+### R1: Octal digit overflow (engine.rs, 0k-safe-rm.rs)
+
+**Problem:** `unescape_mountinfo_octal` used `is_ascii_digit()` which accepts 0-9. Octal only uses 0-7. Input like `\899` would compute `(8-0)*64 = 512`, overflowing `u8` — panic in debug, silent corruption in release.
+
+**Fix:** Changed validation from `is_ascii_digit()` to `(b'0'..=b'7').contains()` in both `engine.rs` and `0k-safe-rm.rs`.
+
+### R2: `has_active_mounts_inside` fail-open (engine.rs)
+
+**Problem:** When `canonicalize()` or reading `/proc/self/mountinfo` failed, the function returned `false` ("no mounts found"), allowing `gc_remove_dir` to proceed with deletion even when mount state was unknown.
+
+**Fix:** Changed both error branches to return `true` ("assume unsafe, skip deletion").
+
+### R3-R5: Remaining `.unwrap()`/`.expect()` policy violations
+
+**Fix:** Replaced with `?`-propagating error handling:
+- `executor.rs:83`: `.unwrap()` → `.ok_or_else(|| io::Error::new(...))?`
+- `executor.rs:178`: `.expect()` → `.map_err(|e| io::Error::new(...))?`
+- `0k.rs:441`: `.unwrap()` → `.ok_or_else(|| ZkError::MissingTarget(...))?`
+
+### R6: CliExit type narrowing
+
+**Fix:** Changed `ZkError::CliExit(i32)` to `ZkError::CliExit(u8)`. All call sites now cast `e.exit_code() as u8` at the point of creation.
+
+### R7: Silent fallback to "unknown" entry name
+
+**Fix:** Replaced `.unwrap_or("unknown")` with `.ok_or_else(|| ZkError::OperationFailed(...))` in both `check` and `restore_from_mount` functions. Missing entry names now produce clear error messages instead of silently constructing wrong paths.
+
+### R8: /proc/mounts octal escapes in 0k-core.rs
+
+**Problem:** The LUKS umount flow parsed `/proc/mounts` without decoding kernel octal escapes (`\040` = space). Mount points with spaces in their path would not be found.
+
+**Fix:** Made `unescape_mountinfo_octal()` public in the library and applied it to `mount_point` in the `/proc/mounts` parsing loop in `0k-core.rs`.
+
+---
+
 ## Test Summary
 
-After all fixes:
+After all fixes (initial + re-audit):
 
 ```
-Running unittests src/lib.rs:      41 passed (+10 new: GC helpers, mountinfo, age check)
+Running unittests src/lib.rs:      42 passed (+11 new: GC helpers, mountinfo, octal edge cases)
 Running unittests src/bin/0k.rs:   10 passed
 Running unittests src/bin/0k-core: 11 passed (+4 new: mapper sanitization, LUKS open retry)
 Running unittests src/bin/0k-safe: 7 passed  (+5 new: mount check, unescape)
 Running tests/file_type_detection: 1 passed
-Total: 70 passed, 0 failed
+Total: 71 passed, 0 failed
 ```
 
 ---
@@ -533,12 +583,12 @@ Total: 70 passed, 0 failed
 
 | File | Changes |
 |------|---------|
-| `src/engine.rs` | Issues 1, 2, 6, 9, 11, 12, 16 + 15 new tests (compare, staging, GC helpers) |
+| `src/engine.rs` | Issues 1, 2, 6, 9, 11, 12, 16, R1, R2, R7 + 16 new tests |
 | `src/manifest.rs` | Issues 3, 10 + 3 new test cases |
-| `src/executor.rs` | Issue 17: `cfg_attr` extended with `feature = "testing"` |
-| `src/error.rs` | Issue 7: Added `CliExit(i32)` variant |
-| `src/bin/0k-core.rs` | Issues 2, 4, 5, 7, 8, 17 + 4 new tests, `AtomicBool` + `ExitCode` |
-| `src/bin/0k-safe-rm.rs` | Issues 7, 14: mount check + `ExitCode` + 5 new tests |
-| `src/bin/0k.rs` | Issues 4, 7: `ExitCode` + `CliExit` error propagation |
+| `src/executor.rs` | Issues 17, R3, R4: `cfg_attr`, `.unwrap()` fix, `.expect()` fix |
+| `src/error.rs` | Issues 7, R6: `CliExit(u8)` |
+| `src/bin/0k-core.rs` | Issues 2, 4, 5, 7, 8, 17, R8 + 4 new tests, octal decode in /proc/mounts |
+| `src/bin/0k-safe-rm.rs` | Issues 7, 14, R1: mount check + `ExitCode` + octal fix + 5 new tests |
+| `src/bin/0k.rs` | Issues 4, 7, R5: `ExitCode` + `.unwrap()` fix |
 | `Cargo.toml` | Issue 17: `testing` feature + optional `mockall` dep |
 | `Justfile` | Issue 17: `--features testing` in unit-tests |

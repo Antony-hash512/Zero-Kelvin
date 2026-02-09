@@ -188,13 +188,13 @@ fn is_dir_older_than(path: &Path, max_age_secs: u64) -> bool {
 fn has_active_mounts_inside(path: &Path) -> bool {
     let canonical = match path.canonicalize() {
         Ok(c) => c,
-        Err(_) => return false, // Can't resolve → assume safe
+        Err(_) => return true, // Can't resolve → assume unsafe, skip deletion
     };
     let prefix = canonical.to_string_lossy().to_string();
 
     let mountinfo = match fs::read_to_string("/proc/self/mountinfo") {
         Ok(content) => content,
-        Err(_) => return false, // Can't read → assume safe (not Linux or restricted)
+        Err(_) => return true, // Can't read → assume unsafe, skip deletion
     };
 
     for line in mountinfo.lines() {
@@ -211,8 +211,8 @@ fn has_active_mounts_inside(path: &Path) -> bool {
     false
 }
 
-/// Unescape octal sequences in /proc/self/mountinfo paths (e.g., \040 → space).
-fn unescape_mountinfo_octal(s: &str) -> String {
+/// Unescape octal sequences in /proc/self/mountinfo and /proc/mounts paths (e.g., \040 → space).
+pub fn unescape_mountinfo_octal(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut result = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -221,7 +221,10 @@ fn unescape_mountinfo_octal(s: &str) -> String {
             let d1 = bytes[i + 1];
             let d2 = bytes[i + 2];
             let d3 = bytes[i + 3];
-            if d1.is_ascii_digit() && d2.is_ascii_digit() && d3.is_ascii_digit() {
+            if (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+                && (b'0'..=b'7').contains(&d3)
+            {
                 let val = (d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0');
                 result.push(val);
                 i += 4;
@@ -394,7 +397,12 @@ pub fn check<E: CommandExecutor>(
             .name
             .as_deref()
             .or(live_root.file_name().and_then(|n| n.to_str()))
-            .unwrap_or("unknown");
+            .ok_or_else(|| {
+                ZkError::OperationFailed(format!(
+                    "Cannot determine entry name for id {} (no name in manifest and no filename in path {:?})",
+                    entry.id, live_root
+                ))
+            })?;
 
         let mount_root = mount_point
             .join("to_restore")
@@ -809,7 +817,12 @@ fn restore_from_mount<E: CommandExecutor>(
             .name
             .as_deref()
             .or(dest_path.file_name().and_then(|n| n.to_str()))
-            .unwrap_or("unknown");
+            .ok_or_else(|| {
+                ZkError::OperationFailed(format!(
+                    "Cannot determine entry name for id {} (no name in manifest and no filename in path {:?})",
+                    entry.id, dest_path
+                ))
+            })?;
 
         // Construct source path in mount
         // Structure: mount_point/to_restore/<id>/<name>
@@ -1600,6 +1613,19 @@ mod tests {
         assert_eq!(
             unescape_mountinfo_octal("/mnt/data\\04"),
             "/mnt/data\\04"
+        );
+    }
+
+    #[test]
+    fn test_unescape_mountinfo_octal_non_octal_digits() {
+        // Digits 8 and 9 are NOT valid octal — should be kept as-is (not decoded)
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/data\\899"),
+            "/mnt/data\\899"
+        );
+        assert_eq!(
+            unescape_mountinfo_octal("/mnt/data\\089"),
+            "/mnt/data\\089"
         );
     }
 

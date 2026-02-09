@@ -172,7 +172,7 @@ fn main() -> std::process::ExitCode {
 
     match run_app() {
         Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(ZkError::CliExit(code)) => std::process::ExitCode::from(code as u8),
+        Err(ZkError::CliExit(code)) => std::process::ExitCode::from(code),
         Err(e) => {
             if let Some(friendly) = e.friendly_message() {
                 eprintln!("Suggestion: {}", friendly);
@@ -219,7 +219,7 @@ fn run_app() -> Result<(), ZkError> {
                             eprintln!("Error: {}\n", e);
                             sub_cmd.print_help().unwrap_or_default();
                             println!();
-                            return Err(ZkError::CliExit(e.exit_code()));
+                            return Err(ZkError::CliExit(e.exit_code() as u8));
                         }
                     }
                 }
@@ -231,7 +231,7 @@ fn run_app() -> Result<(), ZkError> {
                 _ => {}
             }
             // Fallback: print and return with clap's exit code
-            let code = e.exit_code();
+            let code = e.exit_code() as u8;
             let _ = e.print();
             return Err(ZkError::CliExit(code));
         }
@@ -239,7 +239,7 @@ fn run_app() -> Result<(), ZkError> {
 
     use clap::FromArgMatches;
     let args = Args::from_arg_matches(&matches).map_err(|e| {
-        let code = e.exit_code();
+        let code = e.exit_code() as u8;
         let _ = e.print();
         ZkError::CliExit(code)
     })?;
@@ -438,7 +438,9 @@ fn resolve_freeze_args(
         ));
     }
 
-    let output_path = args.pop().unwrap(); // Last one
+    let output_path = args.pop().ok_or_else(|| {
+        ZkError::MissingTarget("Destination archive path is required".into())
+    })?;
 
     // 2. Collect Targets
     let mut targets = args; // The rest are targets

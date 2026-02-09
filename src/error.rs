@@ -33,7 +33,7 @@ pub enum ZkError {
     /// CLI argument parsing resulted in an error that was already printed.
     /// Carries the desired process exit code (e.g. 2 for invalid subcommand).
     #[error("")]
-    CliExit(i32),
+    CliExit(u8),
 }
 
 impl ZkError {

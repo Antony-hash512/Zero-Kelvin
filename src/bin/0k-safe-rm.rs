@@ -110,7 +110,10 @@ fn unescape_mountinfo(s: &str) -> String {
             let d1 = bytes[i + 1];
             let d2 = bytes[i + 2];
             let d3 = bytes[i + 3];
-            if d1.is_ascii_digit() && d2.is_ascii_digit() && d3.is_ascii_digit() {
+            if (b'0'..=b'7').contains(&d1)
+                && (b'0'..=b'7').contains(&d2)
+                && (b'0'..=b'7').contains(&d3)
+            {
                 let val = (d1 - b'0') * 64 + (d2 - b'0') * 8 + (d3 - b'0');
                 result.push(val);
                 i += 4;

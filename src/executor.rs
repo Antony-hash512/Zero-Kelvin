@@ -80,7 +80,8 @@ impl CommandExecutor for RealSystem {
             .stderr(Stdio::piped())   // Capture stderr
             .spawn()?;
 
-        let stderr_pipe = child.stderr.take().unwrap();
+        let stderr_pipe = child.stderr.take()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "Failed to capture stderr pipe"))?;
         
         // We need to read stderr in a thread or loop to avoid blocking? 
         // Or just read to string since stderr volume is usually low for prompts?
@@ -175,7 +176,8 @@ impl CommandExecutor for RealSystem {
         progress_bar: &ProgressBar,
     ) -> std::io::Result<Output> {
         // Regex to find percentage like "45%" or "100%"
-        let percent_re = Regex::new(r"(\d+)%").expect("Invalid regex");
+        let percent_re = Regex::new(r"(\d+)%")
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("Regex error: {}", e)))?;
         
         // Spawn the command with piped stdout
         let mut child = Command::new(program)

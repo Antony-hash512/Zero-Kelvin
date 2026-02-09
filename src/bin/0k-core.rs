@@ -644,7 +644,7 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(ZkError::CliExit(code)) => {
             // Already printed by clap — just propagate exit code
-            std::process::ExitCode::from(code as u8)
+            std::process::ExitCode::from(code)
         }
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -703,7 +703,7 @@ fn run_app() -> Result<(), ZkError> {
                              eprintln!("Error: {}\n", e);
                              sub_cmd.print_help()?;
                              println!();
-                             return Err(ZkError::CliExit(e.exit_code()));
+                             return Err(ZkError::CliExit(e.exit_code() as u8));
                         }
                     }
                 }
@@ -715,7 +715,7 @@ fn run_app() -> Result<(), ZkError> {
                 _ => {}
             }
             // Fallback: print and return with clap's exit code
-            let code = e.exit_code();
+            let code = e.exit_code() as u8;
             let _ = e.print();
             return Err(ZkError::CliExit(code));
         }
@@ -723,7 +723,7 @@ fn run_app() -> Result<(), ZkError> {
 
     use clap::FromArgMatches;
     let args = Args::from_arg_matches(&matches).map_err(|e| {
-        let code = e.exit_code();
+        let code = e.exit_code() as u8;
         let _ = e.print();
         ZkError::CliExit(code)
     })?;
@@ -1774,7 +1774,7 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                                             let parts: Vec<&str> = mount_line.split_whitespace().collect();
                                             if parts.len() >= 2 {
                                                 let source = parts[0];
-                                                let mount_point = parts[1];
+                                                let mount_point = &zero_kelvin::engine::unescape_mountinfo_octal(parts[1]);
                                                 
                                                 // Check if it's a sq_* mapper
                                                 if source.starts_with("/dev/mapper/sq_") {
