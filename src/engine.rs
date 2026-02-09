@@ -887,32 +887,38 @@ fn restore_from_mount<E: CommandExecutor>(
 
         // Ensure parent directory exists
         if !restore_parent.exists() {
-            if let Err(_) = fs::create_dir_all(&restore_parent) {
-                // Fallback to sudo mkdir -p
-                if let Some(runner) =
-                    utils::check_root_or_get_runner("Parent directory creation requires root")?
-                {
-                    let status = executor.run_interactive(
-                        &runner,
-                        &[
-                            "mkdir",
-                            "-p",
-                            restore_parent
-                                .to_str()
-                                .ok_or(ZkError::InvalidPath(restore_parent.clone()))?,
-                        ],
-                    )?;
-                    if !status.success() {
-                        return Err(ZkError::OperationFailed(format!(
-                            "Failed to create directory {:?}",
-                            restore_parent
-                        )));
+            if let Err(e) = fs::create_dir_all(&restore_parent) {
+                let zk_error = ZkError::IoError(e);
+                
+                // Whitelist check: only ask for root if it's strictly a permission error
+                if utils::is_permission_denied(&zk_error) {
+                    if let Some(runner) =
+                        utils::check_root_or_get_runner("Parent directory creation requires root")?
+                    {
+                        let status = executor.run_interactive(
+                            &runner,
+                            &[
+                                "mkdir",
+                                "-p",
+                                restore_parent
+                                    .to_str()
+                                    .ok_or(ZkError::InvalidPath(restore_parent.clone()))?,
+                            ],
+                        )?;
+                        if !status.success() {
+                            return Err(ZkError::OperationFailed(format!(
+                                "Failed to create directory {:?} (sudo failed)",
+                                restore_parent
+                            )));
+                        }
+                    } else {
+                        // Permission denied, but no escalation tool found (or user cancelled?)
+                        // check_root_or_get_runner fails if no tool found.
+                        return Err(zk_error); 
                     }
                 } else {
-                    return Err(ZkError::OperationFailed(format!(
-                        "Failed to create directory {:?}",
-                        restore_parent
-                    )));
+                     // Not a permission error (e.g. File Exists, Disk Full) -> Fail immediately
+                     return Err(zk_error);
                 }
             }
         }
