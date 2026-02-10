@@ -16,8 +16,8 @@ depends=(
     'rsync'                # File synchronization for unfreeze
     'util-linux'           # mount/umount, findmnt, lsblk
 )
-makedepends=('cargo' 'git' 'fish' 'bats' 'just')
-checkdepends=('fish' 'bats' 'just')
+makedepends=('cargo' 'git' 'fish' 'bats')
+checkdepends=('fish' 'bats')
 optdepends=(
     'rclone: Stream SquashFS images directly to remote storage (NAS/cloud)'
 )
@@ -49,8 +49,7 @@ check() {
     cargo test --release --locked --features testing
 
     # Integration tests (shell, no root)
-    # Reusing the just task designed for PKGBUILD environments
-    just check-online-pkgbuild
+    fish tests/run_shell_tests.fish --no-build-release --no-root
 }
 
 package() {
