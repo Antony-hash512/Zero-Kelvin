@@ -11,3 +11,20 @@
 # Logs and histories
 conversation_history.md
 current_task.md
+
+# the dev branch files
+CLAUDE.md
+GEMINI.md
+Justfile
+PKGBUILD.draft
+TODO.md
+audits/audit_v0.2.md
+audits/security_fixes_report.md
+drafts.md
+local_pkg/PKGBUILD
+test_symlinks.sh
+to_port/get_root_cmd.fish
+to_port/rm-if-empty.fish
+to_port/squash_manager.fish
+to_port/zero-kelvin-store.fish
+
