@@ -17,7 +17,7 @@ A Rust port of the `zero-kelvin-store` function set (originally written for Fish
 
 *   **Linux Kernel:** 5.10+ (for `unshare` and `user namespace` features)
 *   **Essential Tools:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`
-*   **Optional Tools:** <!--`rclone` (for `--direct-rclone` streaming), this flag is not implemented yet--> `doas`, `pkexec`, `run0` (alternative privilege escalators)
+*   **Optional Tools:** <!--`rclone` (for `--direct-rclone` streaming), this flag is not implemented yet--> `sudo`, `doas`, `sudo-rs`, `pkexec`, `run0`, `pleaser` (alternative privilege escalators)
 
 
 ---
@@ -143,7 +143,7 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 
 *   **Ядро Linux:** 5.10+ (для функций `unshare` и `user namespace`)
 *   **Основные утилиты:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`
-*   **Дополнительные утилиты:** <!--`rclone` (для потоковой передачи `--direct-rclone`), эта опция еще не реализована--> `doas`, `pkexec`, `run0` (альтернативные эскалаторы привилегий)
+*   **Дополнительные утилиты:** <!--`rclone` (для потоковой передачи `--direct-rclone`), эта опция еще не реализована--> `sudo`, `doas`, `sudo-rs`, `pkexec`, `run0`, `pleaser` (альтернативные эскалаторы привилегий)
 
 ---
 
