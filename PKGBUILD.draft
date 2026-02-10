@@ -6,7 +6,7 @@ depends=(
     'squashfs-tools-ng' # <-- ВОТ ТУТ живёт tar2sqfs
     'squashfuse'      # FUSE драйвер для монтирования без прав root
     'cryptsetup'        # LUKS
-    'rclone'            # Rclone
+    'rsync'            # Rsync
     'util-linux'    # mount/umount (обычно не пишут, т.к. это база системы, но можно написать)
 )
 
@@ -24,10 +24,10 @@ prepare() {
     # Если вы собираете из git-исходников, нужно подтянуть сабмодули,
     # иначе тесты упадут с ошибкой "load failed"
     git submodule update --init --recursive
+    cargo fetch
 }
 
 check() {
     cd "$srcdir/$pkgname"
-    cargo check
-    just build-and-shell-tests-release
+    just check-online-pkgbuild
 }

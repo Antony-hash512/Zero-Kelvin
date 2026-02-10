@@ -4,16 +4,6 @@
 default:
     @just --list --unsorted
 
-# Запуск вообще всех тестов
-test-all:
-    just unit-tests
-    just build-and-shell-tests
-
-# Запуск вообще всех тестов без root
-test-all-noroot:
-    just unit-tests
-    just build-and-shell-tests-noroot
-
 # Проверить форматирование (удобно для пре-коммит хуков)
 fmt-check:
     cargo fmt -- --check
@@ -77,3 +67,6 @@ build-and-shell-tests-noroot:
 build-and-shell-tests-release:
     fish tests/run_shell_tests.fish --build-release --no-root
 
+# для функции check при онлайн проверке PKGBUILD (например, в AUR)
+check-online-pkgbuild: unit-tests
+    fish tests/run_shell_tests.fish --no-build --no-root
