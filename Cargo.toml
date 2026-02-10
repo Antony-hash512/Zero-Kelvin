@@ -1,6 +1,6 @@
 [package]
 name = "zero-kelvin-testing"
-version = "0.2.29"
+version = "0.3.0"
 edition = "2024"
 description = "Secure and efficient backup tool using SquashFS and LUKS/Rclone"
 
