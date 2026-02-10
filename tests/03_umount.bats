@@ -19,66 +19,66 @@ setup() {
 }
 
 teardown() {
-    # Чистим все монтирования внутри временной папки
+    # Clean up all mounts inside temporary folder
     find "$TMP_ENV" -maxdepth 2 -type d -exec fusermount -u {} 2>/dev/null \; || true
 }
 
-@test "Smoke: Размонтирование по явному пути (статус 0)" {
+@test "Smoke: Unmount by explicit path (status 0)" {
     mkdir -p "$TMP_ENV/mnt_smoke"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"
     [ -d "$TMP_ENV/mnt_smoke" ]
     
-    # Непосредственно тест
+    # Actual test
     run $ZKS_SQM_BIN umount "$TMP_ENV/mnt_smoke"
     [ "$status" -eq 0 ]
     
-    # Проверка, что больше не смонтировано (например, файл внутри недоступен или папка пуста/удалена)
+    # Verify it's no longer mounted (e.g., file inside is inaccessible or folder is empty/deleted)
     # squashfuse usually leaves empty dir.
     # Check if file exists inside (should NOT)
     [ ! -f "$TMP_ENV/mnt_smoke/file.txt" ]
     
-    # В Linux можно также проверить через `mount` или `/proc/mounts`, 
-    # но косвенная проверка через доступность файлов тоже ок для Smoke.
+    # On Linux, one could also check via `mount` or `/proc/mounts`, 
+    # but indirect check via file accessibility is fine for Smoke.
 }
 
-@test "Logic: Размонтирование по явному пути (Удаление каталога)" {
+@test "Logic: Unmount by explicit path (Directory removal)" {
     mkdir -p "$TMP_ENV/mnt_rmdir"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_rmdir"
     [ -d "$TMP_ENV/mnt_rmdir" ]
     
-    # Непосредственно тест
+    # Actual test
     run $ZKS_SQM_BIN umount "$TMP_ENV/mnt_rmdir"
     [ "$status" -eq 0 ]
     
-    # Проверка, что каталог БЫЛ УДАЛЕН
+    # Verify the directory WAS REMOVED
     [ ! -d "$TMP_ENV/mnt_rmdir" ]
 }
 
-@test "Logic: Размонтирование по явному пути (Сохранение каталога)" {
+@test "Logic: Unmount by explicit path (Directory preservation)" {
     mkdir -p "$TMP_ENV/mnt_keepdir"
     touch "$TMP_ENV/mnt_keepdir/file.txt"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_keepdir"
     [ -d "$TMP_ENV/mnt_keepdir" ]
     
-    # Непосредственно тест
+    # Actual test
     run $ZKS_SQM_BIN umount "$TMP_ENV/mnt_keepdir"
     [ "$status" -eq 0 ]
     
-    # Проверка, что каталог НЕ БЫЛ УДАЛЕН
+    # Verify the directory WAS NOT REMOVED
     [ -d "$TMP_ENV/mnt_keepdir" ]
 
-    # Проверка, что внутри каталога по прежнему есть файлы
+    # Verify that files still exist inside the directory
     [ -f "$TMP_ENV/mnt_keepdir/file.txt" ]
 
     # Очистка
     rm -rf "$TMP_ENV/mnt_keepdir"
 }
 
-@test "Logic: Размонтирование по пути к файлу образа (Image Path) (статус 0)" {
+@test "Logic: Unmount by image file path (Image Path) (status 0)" {
     mkdir -p "$TMP_ENV/mnt_img"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img"
     
-    # Тест: передаем путь к .sqfs файлу, а не к точке монтирования
+    # Test: pass path to .sqfs file instead of mount point
     run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
     
     if [ "$status" -ne 0 ]; then
@@ -92,36 +92,36 @@ teardown() {
     # Проверка вывода (опционально)
     # [[ "$output" == *"Unmounted"* ]]
     
-    # Проверка факта размонтирования
+    # Verify unmount success
     [ ! -f "$TMP_ENV/mnt_img/file.txt" ]
 }
 
-@test "Logic: Размонтирование по пути к файлу образа (Image Path) (Удаление каталога)" {
+@test "Logic: Unmount by image file path (Image Path) (Directory removal)" {
     mkdir -p "$TMP_ENV/mnt_img_rmdir"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img_rmdir"
     
-    # Тест: передаем путь к .sqfs файлу
+    # Test: pass path to .sqfs file
     run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
     [ "$status" -eq 0 ]
     
-    # Проверка, что каталог БЫЛ УДАЛЕН
+    # Verify the directory WAS REMOVED
     [ ! -d "$TMP_ENV/mnt_img_rmdir" ]
 }
 
-@test "Logic: Размонтирование по пути к файлу образа (Image Path) (Сохранение каталога)" {
+@test "Logic: Unmount by image file path (Image Path) (Directory preservation)" {
     mkdir -p "$TMP_ENV/mnt_img_keepdir"
     touch "$TMP_ENV/mnt_img_keepdir/file.txt"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_img_keepdir"
     [ -d "$TMP_ENV/mnt_img_keepdir" ]
     
-    # Непосредственно тест
+    # Actual test
     run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
     [ "$status" -eq 0 ]
     
-    # Проверка, что каталог НЕ БЫЛ УДАЛЕН
+    # Verify the directory WAS NOT REMOVED
     [ -d "$TMP_ENV/mnt_img_keepdir" ]
 
-    # Проверка, что внутри каталога по прежнему есть файлы
+    # Verify that files still exist inside the directory
     [ -f "$TMP_ENV/mnt_img_keepdir/file.txt" ]
 
     # Очистка
@@ -129,36 +129,36 @@ teardown() {
 }
 
 
-@test "Logic: Размонтирование множественных точек (Multiple Mounts)" {
+@test "Logic: Unmount multiple mount points" {
     mkdir -p "$TMP_ENV/mnt_multi_1"
     mkdir -p "$TMP_ENV/mnt_multi_2"
     
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_multi_1"
     $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_multi_2"
     
-    # Убеждаемся, что оба смонтированы
+    # Ensure both are mounted
     [ -f "$TMP_ENV/mnt_multi_1/file.txt" ]
     [ -f "$TMP_ENV/mnt_multi_2/file.txt" ]
     
-    # Тест: Размонтируем все вхождения этого образа
+    # Test: Unmount all instances of this image
     run $ZKS_SQM_BIN umount "$GOLDEN_ARCHIVE"
     [ "$status" -eq 0 ]
     
-    # Проверяем, что ОБА отмонтировались
+    # Verify BOTH were unmounted
     [ ! -f "$TMP_ENV/mnt_multi_1/file.txt" ]
     [ ! -f "$TMP_ENV/mnt_multi_2/file.txt" ]
 }
 
-@test "Error: Попытка размонтировать несуществующий путь" {
+@test "Error: Attempt to unmount non-existent path" {
     run $ZKS_SQM_BIN umount "$TMP_ENV/non_existent_path"
     [ "$status" -ne 0 ]
 }
 
-@test "Error: Попытка размонтировать образ, который не смонтирован" {
-    # Создаем фиктивный образ, который точно не смонтирован
+@test "Error: Attempt to unmount an image that is not mounted" {
+    # Create a dummy image that is definitely not mounted
     touch "$TMP_ENV/unused.sqfs"
     
     run $ZKS_SQM_BIN umount "$TMP_ENV/unused.sqfs"
     [ "$status" -ne 0 ]
-    # Ожидаем сообщение типа "Image is not mounted" или "No mount points found"
+    # Expect a message like "Image is not mounted" or "No mount points found"
 }
