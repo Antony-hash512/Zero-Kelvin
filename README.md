@@ -73,7 +73,7 @@ Auxiliary utility:
 > **Workaround:** Create the output file on the same filesystem as the source data, then move or copy it to the external/network drive manually.
 > This issue does not affect non-encrypted mode.
 >
-> Other small bugs have also been found and will be fixed in future versions.
+> Other minor issues with error messages have also been found and will be fixed in future versions.
 
 #### Freeze (Archive/Offload)
 Move logically grouped paths into a "frozen" state (`0k` and `zero-kelvin` are fully equivalent aliases for this utility).
@@ -203,7 +203,7 @@ cargo build --release
 > Будет исправлено в следующих версиях. Временное решение: создавате output-файл на той же файловой системе, что что и входные данные, и только после его создания перемещайте/копируйте на внешнею файловую систему.
 > В режиме без шифрования данной проблемы нет
 >
-> Также были найдены и другие мелкие баги, которые я постараюсь исправить в следующих версиях
+> Также были найдены и другие мелкие баги (также неправильные сообщения ошибках), которые я постараюсь исправить в следующих версиях
 
 
 #### Freeze (Архивация/Заморозка)
