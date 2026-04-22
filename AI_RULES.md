@@ -246,3 +246,5 @@ src/
     👉 Читай: `.agent/skills/zks-manifest/SKILL.md`
 * **Системный уровень (Rootless FUSE, LUKS, User Namespaces, Staging Cache):**
     👉 Читай: `.agent/skills/zks-system/SKILL.md`
+* **Читабельность кода (Борьба с вложенностью, рефакторинг):**
+    👉 Читай: `.agent/skills/zks-readability/SKILL.md`
