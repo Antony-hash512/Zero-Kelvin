@@ -241,7 +241,7 @@ src/
 **ВНИМАНИЕ ДЛЯ AI-АГЕНТОВ:** Ниже указаны пути к детальным спецификациям. Если текущая задача затрагивает одну из этих тем, ты ОБЯЗАН прочитать соответствующий файл `SKILL.md` перед генерацией кода.
 
 * **Тестирование (Mockall, BATS, Sudo в тестах):**
-    👉 Читай: `.agent/skills/zks-qa/SKILL.md`
+    👉 Читай: `.agent/skills/zks-testing/SKILL.md`
 * **Архитектура файлов (list.yaml, структура Sqfs, совместимость):**
     👉 Читай: `.agent/skills/zks-manifest/SKILL.md`
 * **Системный уровень (Rootless FUSE, LUKS, User Namespaces, Staging Cache):**
