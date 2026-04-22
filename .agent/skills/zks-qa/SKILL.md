@@ -1,6 +1,6 @@
 ---
-Name: zks-qa
-Description: Правила тестирования: Unit-тесты, использование mockall, интеграционные тесты на BATS и уровни тестирования (Strict TDD).
+Name: "zks-qa"
+Description: "Правила тестирования: Unit-тесты, использование mockall, интеграционные тесты на BATS и уровни тестирования (Strict TDD)."
 ---
 # zks-qa
 
