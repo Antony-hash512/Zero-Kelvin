@@ -1,3 +1,7 @@
+---
+Name: zks-system
+Description: Системный уровень работы: Rootless FUSE, LUKS, User Namespaces, алгоритм сборки, очистка кэша и правила эскалации привилегий.
+---
 # zks-system
 
 #### User-Space Friendly (Права доступа)

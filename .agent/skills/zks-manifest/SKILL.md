@@ -1,3 +1,7 @@
+---
+Name: zks-manifest
+Description: Архитектура файлов, структура list.yaml, формат SquashFS и обратная совместимость (Legacy).
+---
 # zks-manifest
 
 ### Флаги команды
