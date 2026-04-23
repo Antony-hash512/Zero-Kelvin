@@ -1,7 +1,7 @@
 ---
 Name: "zks-readability"
 Description: "Стандарты читабельности кода: борьба с глубокой вложенностью, ранние возвраты, декомпозиция функций."
-disable-mode-invocation: false
+user-invocation: true
 ---
 # zks-readability
 
