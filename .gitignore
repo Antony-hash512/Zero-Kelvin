@@ -17,6 +17,8 @@ CLAUDE.md
 GEMINI.md
 AGENTS.md
 AI_RULES.md
+.agents/*
+.claude/*
 Justfile
 PKGBUILD.draft
 TODO.md
