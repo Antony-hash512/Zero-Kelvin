@@ -16,11 +16,12 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(ZkError::CliExit(code)) => std::process::ExitCode::from(code),
         Err(e) => {
+            let code = e.exit_code();
             if let Some(friendly) = e.friendly_message() {
                 eprintln!("Suggestion: {}", friendly);
             }
             eprintln!("Error: {}", e);
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(code)
         }
     }
 }

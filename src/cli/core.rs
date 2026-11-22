@@ -59,7 +59,7 @@ impl Args {
                    .tar.zip (requires 'unzip')
                    .tar.7z (requires '7z')
                    .tar.rar (requires 'unrar')
-      Note: Archive repacking requires 'tar2sqfs' (from squashfs-tools-ng) installed.
+      Note: Archive repacking is optional and requires 'tar2sqfs' (from squashfs-tools-ng) plus the format's decompressor.
 
   mount <IMAGE> [MOUNT_POINT]
     Mount a SquashFS image as a directory.

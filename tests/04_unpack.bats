@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 
 setup() {
+    bats_require_minimum_version 1.5.0
+
     # Create a unique temporary directory for each test
     TEST_DIR=$(mktemp -d)
     echo "Files created in: $TEST_DIR" >&3
@@ -29,6 +31,10 @@ teardown() {
 }
 
 @test "Repack: .tar (plain) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
+
     # Create input tar
     tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
     
@@ -44,6 +50,10 @@ teardown() {
 }
 
 @test "Repack: .tar.gz (gzip) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
+
     tar -czf "$TEST_DIR/input.tar.gz" -C "$TEST_DIR" input_data
     
     run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.gz" "$OUTPUT_SQFS" --no-progress
@@ -55,6 +65,9 @@ teardown() {
 }
 
 @test "Repack: .tar.zst (zstd) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
     # Requires tar with zstd support
     if ! tar --help | grep -q zstd; then
         skip "tar does not support --zstd"
@@ -70,6 +83,10 @@ teardown() {
 }
 
 @test "Repack: .tar.xz (xz) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
+
     tar -cJf "$TEST_DIR/input.tar.xz" -C "$TEST_DIR" input_data
     
     run $ZKS_SQM_BIN create "$TEST_DIR/input.tar.xz" "$OUTPUT_SQFS" --no-progress
@@ -80,6 +97,9 @@ teardown() {
 }
 
 @test "Repack: .tar.zip (InfoZip) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
     # Requires zip
     if ! command -v zip &> /dev/null; then
         skip "zip not found"
@@ -97,6 +117,9 @@ teardown() {
 }
 
 @test "Repack: .tar.7z (7zip) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
     # Requires 7z
     if ! command -v 7z &> /dev/null; then
         skip "7z not found"
@@ -113,6 +136,9 @@ teardown() {
 }
 
 @test "Repack: .tar.rar (RAR) to .sqfs" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
     # Requires rar (for creating) and unrar (for testing)
     # Check for rar or skip, since we need to CREATE the test file
     if ! command -v rar &> /dev/null; then
@@ -145,16 +171,52 @@ teardown() {
     [[ "$output" == *"Unsupported or unknown archive format"* ]]
 }
 
-# @test "Negative: Missing external tool (fake-check)" {
-#     # Let's test a "corrupted" tar to ensure pipe failure is caught
-#     echo "trash" > "$TEST_DIR/corrupt.tar"
-#     run $ZKS_SQM_BIN create "$TEST_DIR/corrupt.tar" "$OUTPUT_SQFS"
-#     [ "$status" -ne 0 ]
-#     # We expect some failure message about archive repacking failed
-#     [[ "$output" == *"Archive repack failed"* ]]
-# }
+@test "Negative: Missing optional dependency tar2sqfs returns exit code 127" {
+    tar -cf "$TEST_DIR/input.tar" -C "$TEST_DIR" input_data
+
+    # Create a restricted PATH without tar2sqfs
+    local restricted_bin="$TEST_DIR/restricted_bin"
+    mkdir -p "$restricted_bin"
+    ln -s "$(command -v sh)" "$restricted_bin/sh"
+    ln -s "$(command -v cat)" "$restricted_bin/cat"
+
+    run -127 env PATH="$restricted_bin" "$ZKS_SQM_BIN" create "$TEST_DIR/input.tar" "$OUTPUT_SQFS" --no-progress
+    [ "$status" -eq 127 ]
+    [[ "$output" == *"Optional dependency 'tar2sqfs' is not installed"* ]]
+    [[ "$output" == *"squashfs-tools-ng"* ]]
+    [ ! -f "$OUTPUT_SQFS" ]
+}
+
+@test "Negative: Missing optional decompressor returns exit code 127" {
+    tar -czf "$TEST_DIR/input.tar.gz" -C "$TEST_DIR" input_data
+
+    # Provide a dummy executable tar2sqfs in restricted PATH, but omit gzip
+    local restricted_bin="$TEST_DIR/restricted_bin"
+    mkdir -p "$restricted_bin"
+    printf '#!/bin/sh\nexit 0\n' > "$restricted_bin/tar2sqfs"
+    chmod +x "$restricted_bin/tar2sqfs"
+
+    run -127 env PATH="$restricted_bin" "$ZKS_SQM_BIN" create "$TEST_DIR/input.tar.gz" "$OUTPUT_SQFS" --no-progress
+    [ "$status" -eq 127 ]
+    [[ "$output" == *"Optional dependency 'gzip' is not installed"* ]]
+    [ ! -f "$OUTPUT_SQFS" ]
+}
+
+@test "Directory create succeeds when tar2sqfs is absent from PATH" {
+    local restricted_bin="$TEST_DIR/restricted_bin"
+    mkdir -p "$restricted_bin"
+    ln -s "$(command -v mksquashfs)" "$restricted_bin/mksquashfs"
+
+    run env PATH="$restricted_bin" "$ZKS_SQM_BIN" create "$INPUT_DIR" "$OUTPUT_SQFS" --no-progress
+    [ "$status" -eq 0 ]
+    [ -f "$OUTPUT_SQFS" ]
+}
 
 @test "Cleanup: Interrupted archive repack removes incomplete file" {
+    if ! command -v tar2sqfs &> /dev/null; then
+        skip "tar2sqfs (optional dependency) not found"
+    fi
+
     # Create random data file and tar it (slow to repack, unlike sparse files)
     dd if=/dev/urandom of="$TEST_DIR/random.bin" bs=1M count=50 2>/dev/null
     tar -cf "$TEST_DIR/big.tar" -C "$TEST_DIR" random.bin

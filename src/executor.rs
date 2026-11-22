@@ -10,6 +10,9 @@ use std::fs;
 /// Abstraction for running system commands.
 #[cfg_attr(any(test, feature = "testing"), mockall::automock)]
 pub trait CommandExecutor {
+    /// Checks whether an external executable is available in PATH.
+    fn command_exists(&self, program: &str) -> bool;
+
     /// Runs a command synchronously and captures output.
     fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output>;
 
@@ -48,6 +51,10 @@ pub trait CommandExecutor {
 pub struct RealSystem;
 
 impl CommandExecutor for RealSystem {
+    fn command_exists(&self, program: &str) -> bool {
+        which::which(program).is_ok()
+    }
+
     fn run<'a>(&self, program: &str, args: &[&'a str]) -> std::io::Result<Output> {
         Command::new(program)
             .args(args)

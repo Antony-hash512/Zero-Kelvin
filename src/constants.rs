@@ -27,3 +27,7 @@ pub const MANIFEST_MAX_SIZE: u64 = 10 * 1024 * 1024;
 
 /// Directory for application logs under XDG_STATE_HOME
 pub const LOG_DIR_NAME: &str = "logs";
+
+/// Exit code when an optional external dependency required for the requested mode is missing
+/// (follows standard POSIX "command not found" convention).
+pub const EXIT_CODE_MISSING_DEPENDENCY: u8 = 127;

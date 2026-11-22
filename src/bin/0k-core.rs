@@ -5,7 +5,7 @@ use zero_kelvin::cli::core::{Args, Commands};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -521,8 +521,9 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::from(code)
         }
         Err(e) => {
+            let code = e.exit_code();
             eprintln!("Error: {}", e);
-            std::process::ExitCode::FAILURE
+            std::process::ExitCode::from(code)
         }
     }
 }
@@ -702,6 +703,193 @@ fn open_luks_container(
     ))
 }
 
+
+struct DecompressorSpec {
+    binary: &'static str,
+    command: &'static str,
+    package_hint: &'static str,
+    format_label: &'static str,
+}
+
+fn resolve_decompressor(kind: &zero_kelvin::utils::ArchiveType) -> Option<DecompressorSpec> {
+    use zero_kelvin::utils::ArchiveType;
+    match kind {
+        ArchiveType::Tar => Some(DecompressorSpec {
+            binary: "cat",
+            command: "cat",
+            package_hint: "coreutils",
+            format_label: "tar",
+        }),
+        ArchiveType::Gzip => Some(DecompressorSpec {
+            binary: "gzip",
+            command: "gzip -dc",
+            package_hint: "gzip",
+            format_label: "gzip",
+        }),
+        ArchiveType::Bzip2 => Some(DecompressorSpec {
+            binary: "bzip2",
+            command: "bzip2 -dc",
+            package_hint: "bzip2",
+            format_label: "bzip2",
+        }),
+        ArchiveType::Xz => Some(DecompressorSpec {
+            binary: "xz",
+            command: "xz -dc",
+            package_hint: "xz",
+            format_label: "xz",
+        }),
+        ArchiveType::Zstd => Some(DecompressorSpec {
+            binary: "zstd",
+            command: "zstd -dc",
+            package_hint: "zstd",
+            format_label: "zstd",
+        }),
+        ArchiveType::Zip => Some(DecompressorSpec {
+            binary: "unzip",
+            command: "unzip -p",
+            package_hint: "unzip",
+            format_label: "zip",
+        }),
+        ArchiveType::SevenZ => Some(DecompressorSpec {
+            binary: "7z",
+            command: "7z x -so",
+            package_hint: "7zip (or p7zip)",
+            format_label: "7z",
+        }),
+        ArchiveType::Rar => Some(DecompressorSpec {
+            binary: "unrar",
+            command: "unrar p -inul",
+            package_hint: "unrar",
+            format_label: "rar",
+        }),
+        _ => None,
+    }
+}
+
+fn require_optional_tool(
+    executor: &impl CommandExecutor,
+    tool: &str,
+    mode: &str,
+    package_hint: &str,
+) -> Result<(), ZkError> {
+    if executor.command_exists(tool) {
+        return Ok(());
+    }
+    Err(ZkError::MissingOptionalDependency {
+        tool: tool.to_string(),
+        mode: mode.to_string(),
+        package_hint: package_hint.to_string(),
+    })
+}
+
+fn repack_archive(
+    input_path: &Path,
+    output_path: &Path,
+    comp_mode: &CompressionMode,
+    no_progress: bool,
+    executor: &impl CommandExecutor,
+) -> Result<(), ZkError> {
+    let input_str = input_path
+        .to_str()
+        .ok_or_else(|| ZkError::InvalidPath(input_path.to_path_buf()))?;
+    let output_str = output_path
+        .to_str()
+        .ok_or_else(|| ZkError::InvalidPath(output_path.to_path_buf()))?;
+
+    // Determine archive format using infer (magic numbers)
+    let kind = zero_kelvin::utils::get_file_type(input_path)?;
+    let spec = resolve_decompressor(&kind).ok_or_else(|| {
+        ZkError::CompressionError(format!(
+            "Unsupported or unknown archive format for: {:?}",
+            input_path
+        ))
+    })?;
+
+    // Verify optional tools before starting the transaction or shell pipeline
+    require_optional_tool(
+        executor,
+        "tar2sqfs",
+        "archive repacking mode",
+        "squashfs-tools-ng",
+    )?;
+    require_optional_tool(
+        executor,
+        spec.binary,
+        &format!("repacking {} archives", spec.format_label),
+        spec.package_hint,
+    )?;
+
+    // Determine compressor flag for tar2sqfs
+    let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
+
+    // Construct pipeline: decompressor input | tar2sqfs options output
+    // SECURITY: all interpolated values are shell-quoted.
+    let cmd = format!(
+        "{decompressor} '{input}' | tar2sqfs --quiet --no-skip --force {flag} '{output}'",
+        decompressor = spec.command,
+        input = input_str.replace("'", "'\\''"),
+        flag = compressor_flag.replace("'", "'\\''"),
+        output = output_str.replace("'", "'\\''")
+    );
+
+    if std::env::var("RUST_LOG").is_ok() {
+        eprintln!("DEBUG: Executing pipeline: {}", cmd);
+    }
+
+    let input_size = fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
+    let input_size_mb = input_size as f64 / 1024.0 / 1024.0;
+
+    // Create transaction for cleanup on failure
+    let mut transaction = CreateTransaction::new(output_path.to_path_buf());
+
+    // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
+    let full_cmd = format!("set -o pipefail; {}", cmd);
+
+    if no_progress {
+        let output = executor.run("sh", &["-c", &full_cmd])?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(ZkError::OperationFailed(format!(
+                "Archive repack failed: {}",
+                stderr
+            )));
+        }
+        transaction.set_success();
+        return Ok(());
+    }
+
+    let pb = ProgressBar::new(input_size);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}",
+        )
+        .map_err(|e| ZkError::OperationFailed(format!("Progress bar template error: {}", e)))?
+        .progress_chars("█▓▒░  "),
+    );
+    pb.set_message("Repacking archive → SquashFS");
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let output = executor.run_with_file_progress(
+        "sh",
+        &["-c", &full_cmd],
+        output_path,
+        &pb,
+        Duration::from_millis(100),
+    )?;
+
+    if !output.status.success() {
+        pb.finish_with_message("✗ Failed");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ZkError::OperationFailed(format!(
+            "Archive repack failed: {}",
+            stderr
+        )));
+    }
+
+    pb.finish_with_message(format!("✓ Repacked {:.1} MB successfully", input_size_mb));
+    transaction.set_success();
+    Ok(())
+}
 
 /// Main logic entry point with dependency injection
 pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
@@ -1174,108 +1362,13 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
 
             // 2. Archive Repacking (File -> SquashFS)
             if input_path.is_file() {
-                let input_str = input_path.to_str().ok_or(ZkError::InvalidPath(input_path.clone()))?;
-                // Use final_output resolved earlier
-                let output_buf = &final_output;
-                let output_str = output_buf.to_str().ok_or(ZkError::InvalidPath(final_output.clone()))?;
-
-                // Determine decompressor
-                // Determine decompressor using infer (magic numbers)
-                use zero_kelvin::utils::ArchiveType;
-                let kind = zero_kelvin::utils::get_file_type(&input_path)?;
-                
-                let decompressor = match kind {
-                    ArchiveType::Tar => "cat",
-                    ArchiveType::Gzip => "gzip -dc",
-                    ArchiveType::Bzip2 => "bzip2 -dc",
-                    ArchiveType::Xz => "xz -dc",
-                    ArchiveType::Zstd => "zstd -dc",
-                    ArchiveType::Zip => "unzip -p",
-                    ArchiveType::SevenZ => "7z x -so",
-                    ArchiveType::Rar => "unrar p -inul",
-                    _ => {
-                         // Fallback to extension check if unknown (e.g. .tgz might detect as gzip, but maybe something eluded infer)
-                         // But for now, let's trust infer. If unknown, it's unsupported.
-                         return Err(ZkError::CompressionError(format!("Unsupported or unknown archive format for: {:?}", input_path)));
-                    }
-                };
-
-                // Determine compressor flag for tar2sqfs
-                let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
-
-                // Construct pipeline: decompressor input | tar2sqfs options output
-                // Using explicit quoting for paths to handle spaces safely in sh -c
-                // Fixed: Do not pass compression level to -j (threads), use -c <compressor>
-                // SECURITY: all interpolated values are shell-quoted.
-                // compressor_flag is currently hardcoded but quoted defensively
-                // to prevent injection if it ever becomes configurable.
-                let cmd = format!(
-                    "{decompressor} '{input}' | tar2sqfs --quiet --no-skip --force {flag} '{output}'",
-                    decompressor = decompressor,
-                    input = input_str.replace("'", "'\\''"),
-                    flag = compressor_flag.replace("'", "'\\''"),
-                    output = output_str.replace("'", "'\\''")
+                return repack_archive(
+                    &input_path,
+                    &final_output,
+                    &comp_mode,
+                    no_progress,
+                    executor,
                 );
-
-                if std::env::var("RUST_LOG").is_ok() {
-                    eprintln!("DEBUG: Executing pipeline: {}", cmd);
-                }
-
-                // Get input file size for display
-                let input_size = fs::metadata(&input_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                let input_size_mb = input_size as f64 / 1024.0 / 1024.0;
-
-                // Create transaction for cleanup on failure
-                let output_buf = &final_output;
-                let mut transaction = CreateTransaction::new(output_buf.clone());
-
-                // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
-                let full_cmd = format!("set -o pipefail; {}", cmd);
-                
-                if no_progress {
-                    // Silent mode
-                    let output = executor.run("sh", &["-c", &full_cmd])?;
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(ZkError::OperationFailed(format!("Archive repack failed: {}", stderr)));
-                    }
-                } else {
-                    // Progress mode: show filling progress bar
-                    let pb = ProgressBar::new(input_size);
-                    pb.set_style(
-                        ProgressStyle::with_template(
-                            "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}) {msg}"
-                        )
-                        .map_err(|e| ZkError::OperationFailed(format!("Progress bar template error: {}", e)))?
-                        .progress_chars("█▓▒░  ")
-                    );
-                    pb.set_message("Repacking archive → SquashFS");
-                    pb.enable_steady_tick(Duration::from_millis(100));
-
-                    let output = executor.run_with_file_progress(
-                        "sh",
-                        &["-c", &full_cmd],
-                        output_buf,
-                        &pb,
-                        Duration::from_millis(100),
-                    )?;
-                    
-                    if output.status.success() {
-                        pb.finish_with_message(format!(
-                            "✓ Repacked {:.1} MB successfully",
-                            input_size_mb
-                        ));
-                    } else {
-                        pb.finish_with_message("✗ Failed");
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(ZkError::OperationFailed(format!("Archive repack failed: {}", stderr)));
-                    }
-                }
-                
-                transaction.set_success();
-                return Ok(());
             }
 
             // 3. Standard Directory Packing (Directory -> SquashFS)
@@ -2227,6 +2320,14 @@ mod tests {
         assert!(status.success());
         
         let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "tar2sqfs")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_command_exists()
+            .withf(|tool| tool == "gzip")
+            .times(1)
+            .returning(|_| true);
         
         // 2. Expect pipeline execution
         // We know `infer` + `get_file_type` should detect Gzip -> "gzip -dc"
@@ -2269,6 +2370,155 @@ mod tests {
             },
         };
         
+        run(args, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_repack_archive_missing_tar2sqfs_returns_optional_dependency_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_tar_gz = temp_dir.path().join("input.tar.gz");
+        let output_sqfs = temp_dir.path().join("output.sqfs");
+
+        let content_file = temp_dir.path().join("content.txt");
+        fs::write(&content_file, "hello").unwrap();
+
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&input_tar_gz)
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("content.txt")
+            .status()
+            .expect("Failed to run tar for test setup");
+        assert!(status.success());
+
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "tar2sqfs")
+            .times(1)
+            .returning(|_| false);
+        // Must not attempt to execute the shell pipeline when tar2sqfs is absent
+        mock.expect_run().times(0);
+        mock.expect_run_with_file_progress().times(0);
+
+        let args = Args {
+            command: Commands::Create {
+                input_path: input_tar_gz,
+                output_path: Some(output_sqfs.clone()),
+                encrypt: false,
+                compression: DEFAULT_ZSTD_COMPRESSION,
+                no_progress: true,
+                vanilla_progress: false,
+                alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
+            },
+        };
+
+        let err = run(args, &mock).unwrap_err();
+        assert_eq!(err.exit_code(), 127);
+        match err {
+            ZkError::MissingOptionalDependency {
+                tool,
+                mode,
+                package_hint,
+            } => {
+                assert_eq!(tool, "tar2sqfs");
+                assert!(mode.contains("archive repacking"));
+                assert!(package_hint.contains("squashfs-tools-ng"));
+            }
+            other => panic!("Expected MissingOptionalDependency, got: {:?}", other),
+        }
+        assert!(!output_sqfs.exists());
+    }
+
+    #[test]
+    fn test_repack_archive_missing_decompressor_returns_optional_dependency_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_tar_gz = temp_dir.path().join("input.tar.gz");
+        let output_sqfs = temp_dir.path().join("output.sqfs");
+
+        let content_file = temp_dir.path().join("content.txt");
+        fs::write(&content_file, "hello").unwrap();
+
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&input_tar_gz)
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("content.txt")
+            .status()
+            .expect("Failed to run tar for test setup");
+        assert!(status.success());
+
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "tar2sqfs")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_command_exists()
+            .withf(|tool| tool == "gzip")
+            .times(1)
+            .returning(|_| false);
+        mock.expect_run().times(0);
+        mock.expect_run_with_file_progress().times(0);
+
+        let args = Args {
+            command: Commands::Create {
+                input_path: input_tar_gz,
+                output_path: Some(output_sqfs),
+                encrypt: false,
+                compression: DEFAULT_ZSTD_COMPRESSION,
+                no_progress: true,
+                vanilla_progress: false,
+                alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
+            },
+        };
+
+        let err = run(args, &mock).unwrap_err();
+        assert_eq!(err.exit_code(), 127);
+        match err {
+            ZkError::MissingOptionalDependency { tool, .. } => {
+                assert_eq!(tool, "gzip");
+            }
+            other => panic!("Expected MissingOptionalDependency, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_create_directory_does_not_check_tar2sqfs() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_path = temp_dir.path().to_path_buf();
+
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists().times(0);
+        mock.expect_run()
+            .withf(|program, _| program == "mksquashfs")
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        let args = Args {
+            command: Commands::Create {
+                input_path,
+                output_path: Some(temp_dir.path().join("out.sqfs")),
+                encrypt: false,
+                compression: DEFAULT_ZSTD_COMPRESSION,
+                no_progress: true,
+                vanilla_progress: false,
+                alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
+            },
+        };
+
         run(args, &mock).unwrap();
     }
 

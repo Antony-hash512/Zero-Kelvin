@@ -10,7 +10,6 @@ depends=(
     'glibc'
     'gcc-libs'
     'squashfs-tools'       # mksquashfs, unsquashfs
-    'squashfs-tools-ng'    # tar2sqfs
     'squashfuse'           # FUSE mount without root
     'cryptsetup'           # LUKS encryption
     'rsync'                # File synchronization for unfreeze
@@ -19,6 +18,7 @@ depends=(
 makedepends=('cargo' 'git')
 checkdepends=('fish' 'bats')
 optdepends=(
+    'squashfs-tools-ng: Repack tar and compressed archives directly into SquashFS (provides tar2sqfs)'
     #'rclone: Stream SquashFS images directly to remote storage (NAS/cloud)' #(todo)
 )
 provides=('0k' '0k-core' '0k-safe-rm' 'zero-kelvin-core' 'zero-kelvin-safe-rm')

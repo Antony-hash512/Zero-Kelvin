@@ -30,6 +30,13 @@ pub enum ZkError {
     #[error("Missing target: {0}")]
     MissingTarget(String),
 
+    #[error("Optional dependency '{tool}' is not installed (required for {mode}).\nInstall '{package_hint}' to use this mode.")]
+    MissingOptionalDependency {
+        tool: String,
+        mode: String,
+        package_hint: String,
+    },
+
     /// CLI argument parsing resulted in an error that was already printed.
     /// Carries the desired process exit code (e.g. 2 for invalid subcommand).
     #[error("")]
@@ -37,6 +44,16 @@ pub enum ZkError {
 }
 
 impl ZkError {
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            ZkError::CliExit(code) => *code,
+            ZkError::MissingOptionalDependency { .. } => {
+                crate::constants::EXIT_CODE_MISSING_DEPENDENCY
+            }
+            _ => 1,
+        }
+    }
+
     pub fn friendly_message(&self) -> Option<String> {
         match self {
             ZkError::IoError(e) => {
@@ -58,5 +75,34 @@ impl ZkError {
             },
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constants::EXIT_CODE_MISSING_DEPENDENCY;
+
+    #[test]
+    fn test_missing_optional_dependency_exit_code_and_message() {
+        let err = ZkError::MissingOptionalDependency {
+            tool: "tar2sqfs".to_string(),
+            mode: "archive repacking mode".to_string(),
+            package_hint: "squashfs-tools-ng".to_string(),
+        };
+
+        assert_eq!(err.exit_code(), EXIT_CODE_MISSING_DEPENDENCY);
+        assert_eq!(err.exit_code(), 127);
+
+        let msg = err.to_string();
+        assert!(msg.contains("tar2sqfs"));
+        assert!(msg.contains("archive repacking mode"));
+        assert!(msg.contains("squashfs-tools-ng"));
+    }
+
+    #[test]
+    fn test_default_and_cli_exit_codes() {
+        assert_eq!(ZkError::CliExit(2).exit_code(), 2);
+        assert_eq!(ZkError::OperationFailed("boom".to_string()).exit_code(), 1);
     }
 }
