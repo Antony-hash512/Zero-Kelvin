@@ -19,8 +19,10 @@ setup() {
 }
 
 teardown() {
-    # Clean up all mounts inside temporary folder
-    find "$TMP_ENV" -maxdepth 2 -type d -exec fusermount -u {} 2>/dev/null \; || true
+    # Clean up all mounts inside temporary folder (supports both FUSE 3 and FUSE 2)
+    local fm
+    fm="$(command -v fusermount3 || command -v fusermount)"
+    find "$TMP_ENV" -maxdepth 2 -type d -exec "$fm" -u {} 2>/dev/null \; || true
 }
 
 @test "Smoke: Unmount by explicit path (status 0)" {

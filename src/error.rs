@@ -37,6 +37,12 @@ pub enum ZkError {
         package_hint: String,
     },
 
+    #[error("Required tool '{tool}' not found in PATH.\nInstall package '{package_hint}' to use this command.")]
+    MissingTool {
+        tool: String,
+        package_hint: String,
+    },
+
     /// CLI argument parsing resulted in an error that was already printed.
     /// Carries the desired process exit code (e.g. 2 for invalid subcommand).
     #[error("")]
@@ -47,7 +53,7 @@ impl ZkError {
     pub fn exit_code(&self) -> u8 {
         match self {
             ZkError::CliExit(code) => *code,
-            ZkError::MissingOptionalDependency { .. } => {
+            ZkError::MissingOptionalDependency { .. } | ZkError::MissingTool { .. } => {
                 crate::constants::EXIT_CODE_MISSING_DEPENDENCY
             }
             _ => 1,
@@ -104,5 +110,20 @@ mod tests {
     fn test_default_and_cli_exit_codes() {
         assert_eq!(ZkError::CliExit(2).exit_code(), 2);
         assert_eq!(ZkError::OperationFailed("boom".to_string()).exit_code(), 1);
+    }
+
+    #[test]
+    fn test_missing_tool_exit_code_and_message() {
+        let err = ZkError::MissingTool {
+            tool: "squashfuse".to_string(),
+            package_hint: "squashfuse".to_string(),
+        };
+
+        assert_eq!(err.exit_code(), EXIT_CODE_MISSING_DEPENDENCY);
+        assert_eq!(err.exit_code(), 127);
+
+        let msg = err.to_string();
+        assert!(msg.contains("squashfuse"));
+        assert!(msg.contains("not found in PATH"));
     }
 }

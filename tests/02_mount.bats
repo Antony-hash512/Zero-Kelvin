@@ -25,9 +25,11 @@ setup() {
 }
 
 teardown() {
-    # Aggressively attempt to unmount everything inside TMP_ENV
+    # Aggressively attempt to unmount everything inside TMP_ENV (supports both FUSE 3 and FUSE 2)
     # This ensures handles are closed even if a test fails
-    find "$TMP_ENV" -maxdepth 2 -type d -exec fusermount -u {} 2>/dev/null \; || true
+    local fm
+    fm="$(command -v fusermount3 || command -v fusermount)"
+    find "$TMP_ENV" -maxdepth 2 -type d -exec "$fm" -u {} 2>/dev/null \; || true
 }
 @test "Smoke: Verify mount status" {
     run $ZKS_SQM_BIN mount "$GOLDEN_ARCHIVE" "$TMP_ENV/mnt_smoke"

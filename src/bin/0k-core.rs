@@ -893,6 +893,78 @@ fn repack_archive(
     Ok(())
 }
 
+fn mount_plain_squashfs(
+    img_str: &str,
+    mp_str: &str,
+    executor: &impl CommandExecutor,
+) -> Result<(), ZkError> {
+    if !executor.command_exists("squashfuse") {
+        return Err(ZkError::MissingTool {
+            tool: "squashfuse".to_string(),
+            package_hint: "squashfuse".to_string(),
+        });
+    }
+
+    // Try mounting without `-o nonempty` first:
+    // - FUSE 3 (Debian 13 / Tails, Fedora, etc.) allows non-empty mountpoints by default
+    //   and rejects `-o nonempty` as an unknown option.
+    // - FUSE 2 (e.g. Arch squashfuse linked to libfuse2) works directly on empty mountpoints
+    //   and returns a "not empty" error on non-empty ones, where we retry with `-o nonempty`.
+    let output = executor.run("squashfuse", &[img_str, mp_str])?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr_lower = stderr.to_lowercase();
+    if stderr_lower.contains("not empty") || stderr_lower.contains("nonempty") {
+        let retry = executor.run("squashfuse", &["-o", "nonempty", img_str, mp_str])?;
+        if retry.status.success() {
+            return Ok(());
+        }
+        let retry_stderr = String::from_utf8_lossy(&retry.stderr);
+        return Err(ZkError::OperationFailed(format!(
+            "squashfuse failed: {}",
+            retry_stderr
+        )));
+    }
+
+    Err(ZkError::OperationFailed(format!(
+        "squashfuse failed: {}",
+        stderr
+    )))
+}
+
+fn resolve_fusermount_binary(executor: &impl CommandExecutor) -> Result<&'static str, ZkError> {
+    if executor.command_exists("fusermount3") {
+        return Ok("fusermount3");
+    }
+    if executor.command_exists("fusermount") {
+        return Ok("fusermount");
+    }
+    Err(ZkError::MissingTool {
+        tool: "fusermount3 / fusermount".to_string(),
+        package_hint: "fuse3 (or fuse2)".to_string(),
+    })
+}
+
+fn unmount_plain_squashfs(
+    target: &Path,
+    target_str: &str,
+    executor: &impl CommandExecutor,
+) -> Result<(), ZkError> {
+    let fusermount_bin = resolve_fusermount_binary(executor)?;
+    let output = executor.run(fusermount_bin, &["-u", target_str])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(ZkError::OperationFailed(format!(
+            "{} failed for {:?}: {}",
+            fusermount_bin, target, stderr
+        )));
+    }
+    Ok(())
+}
+
 /// Main logic entry point with dependency injection
 pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
     match args.command {
@@ -1621,16 +1693,8 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
             // Plain SquashFS - use squashfuse (no root required)
             let mp_str = target_mount_point.to_str().ok_or(ZkError::InvalidPath(target_mount_point.clone()))?;
             let img_str = image.to_str().ok_or(ZkError::InvalidPath(image.clone()))?;
-            
-            // Added -o nonempty to allow mounting over non-empty directories
-            let output = executor.run("squashfuse", &["-o", "nonempty", img_str, mp_str])?;
-            
-             if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(ZkError::OperationFailed(format!("squashfuse failed: {}", stderr)));
-            }
-            
-            Ok(())
+
+            mount_plain_squashfs(img_str, mp_str, executor)
         },
 
 
@@ -1872,12 +1936,8 @@ pub fn run(args: Args, executor: &impl CommandExecutor) -> Result<(), ZkError> {
                         }
                     }
                 } else {
-                    // Plain squashfuse mount - use fusermount -u
-                    let output = executor.run("fusermount", &["-u", target_str])?;
-                                        if !output.status.success() {
-                          let stderr = String::from_utf8_lossy(&output.stderr);
-                          return Err(ZkError::OperationFailed(format!("fusermount failed for {:?}: {}", target, stderr)));
-                     }
+                    // Plain squashfuse mount - prefer fusermount3 (FUSE 3), fall back to fusermount (FUSE 2)
+                    unmount_plain_squashfs(&target, target_str, executor)?;
                 }
                 
                 // Post-unmount cleanup: remove directory if empty
@@ -2182,15 +2242,15 @@ mod tests {
                 stderr: vec![],
             }));
         
-        // 1. squashfuse (for plain SquashFS)
+        // 1. squashfuse availability check and mount (without -o nonempty by default for FUSE 3 compatibility)
+        mock.expect_command_exists()
+            .withf(|tool| tool == "squashfuse")
+            .times(1)
+            .returning(|_| true);
+
         mock.expect_run()
             .withf(move |program, args: &[&str]| {
-                program == "squashfuse" &&
-                args.len() == 4 && // -o nonempty image mountpoint
-                args[0] == "-o" &&
-                args[1] == "nonempty" &&
-                args[2] == image_path_str
-                // args[3] is the auto-generated path, hard to match exact string due to randomness/time
+                program == "squashfuse" && args.len() == 2 && args[0] == image_path_str
             })
             .times(1)
             .returning(|_, _| Ok(Output {
@@ -2693,5 +2753,143 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("cryptsetup open failed"));
+    }
+
+    #[test]
+    fn test_mount_plain_squashfs_fuse3_without_nonempty() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "squashfuse")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_run()
+            .withf(|prog, args: &[&str]| {
+                prog == "squashfuse" && args == &["/tmp/a.sqfs", "/tmp/mnt"]
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        assert!(mount_plain_squashfs("/tmp/a.sqfs", "/tmp/mnt", &mock).is_ok());
+    }
+
+    #[test]
+    fn test_mount_plain_squashfs_fuse2_retries_with_nonempty() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "squashfuse")
+            .times(1)
+            .returning(|_| true);
+
+        mock.expect_run()
+            .withf(|prog, args: &[&str]| {
+                prog == "squashfuse" && args == &["/tmp/a.sqfs", "/tmp/mnt"]
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(1 << 8),
+                    stdout: vec![],
+                    stderr: b"fuse: mountpoint is not empty\nfuse: if you are sure this is safe, use the 'nonempty' mount option\n".to_vec(),
+                })
+            });
+
+        mock.expect_run()
+            .withf(|prog, args: &[&str]| {
+                prog == "squashfuse" && args == &["-o", "nonempty", "/tmp/a.sqfs", "/tmp/mnt"]
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        assert!(mount_plain_squashfs("/tmp/a.sqfs", "/tmp/mnt", &mock).is_ok());
+    }
+
+    #[test]
+    fn test_mount_plain_squashfs_missing_tool_returns_exit_127() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "squashfuse")
+            .times(1)
+            .returning(|_| false);
+        mock.expect_run().times(0);
+
+        let err = mount_plain_squashfs("/tmp/a.sqfs", "/tmp/mnt", &mock).unwrap_err();
+        assert_eq!(err.exit_code(), 127);
+        assert!(err.to_string().contains("squashfuse"));
+    }
+
+    #[test]
+    fn test_unmount_plain_prefers_fusermount3() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "fusermount3")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_run()
+            .withf(|prog, args: &[&str]| prog == "fusermount3" && args == &["-u", "/tmp/mnt"])
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        assert!(unmount_plain_squashfs(Path::new("/tmp/mnt"), "/tmp/mnt", &mock).is_ok());
+    }
+
+    #[test]
+    fn test_unmount_plain_falls_back_to_fusermount() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "fusermount3")
+            .times(1)
+            .returning(|_| false);
+        mock.expect_command_exists()
+            .withf(|tool| tool == "fusermount")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_run()
+            .withf(|prog, args: &[&str]| prog == "fusermount" && args == &["-u", "/tmp/mnt"])
+            .times(1)
+            .returning(|_, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        assert!(unmount_plain_squashfs(Path::new("/tmp/mnt"), "/tmp/mnt", &mock).is_ok());
+    }
+
+    #[test]
+    fn test_unmount_plain_missing_fusermount_returns_exit_127() {
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "fusermount3")
+            .times(1)
+            .returning(|_| false);
+        mock.expect_command_exists()
+            .withf(|tool| tool == "fusermount")
+            .times(1)
+            .returning(|_| false);
+        mock.expect_run().times(0);
+
+        let err = unmount_plain_squashfs(Path::new("/tmp/mnt"), "/tmp/mnt", &mock).unwrap_err();
+        assert_eq!(err.exit_code(), 127);
+        assert!(err.to_string().contains("fusermount"));
     }
 }
