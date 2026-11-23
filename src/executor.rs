@@ -45,6 +45,145 @@ pub trait CommandExecutor {
         args: &[&'a str],
         progress_bar: &ProgressBar,
     ) -> std::io::Result<Output>;
+
+    /// Runs a native two-stage pipeline (`stage1 | stage2`) without a shell.
+    /// Returns a non-zero exit status if either stage fails (portable `pipefail`).
+    fn run_pipeline<'a>(
+        &self,
+        stage1_prog: &str,
+        stage1_args: &[&'a str],
+        stage2_prog: &str,
+        stage2_args: &[&'a str],
+    ) -> std::io::Result<Output>;
+
+    /// Runs a native two-stage pipeline (`stage1 | stage2`) while polling `output_file` for progress.
+    /// Returns a non-zero exit status if either stage fails (portable `pipefail`).
+    fn run_pipeline_with_file_progress<'a>(
+        &self,
+        stage1_prog: &str,
+        stage1_args: &[&'a str],
+        stage2_prog: &str,
+        stage2_args: &[&'a str],
+        output_file: &Path,
+        progress_bar: &ProgressBar,
+        poll_interval: Duration,
+    ) -> std::io::Result<Output>;
+}
+
+fn execute_native_pipeline(
+    stage1_prog: &str,
+    stage1_args: &[&str],
+    stage2_prog: &str,
+    stage2_args: &[&str],
+    progress: Option<(&Path, &ProgressBar, Duration)>,
+) -> std::io::Result<Output> {
+    use std::io::Read;
+
+    let mut stage1 = Command::new(stage1_prog)
+        .args(stage1_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to spawn {}: {}", stage1_prog, e),
+            )
+        })?;
+
+    let stage1_stdout = stage1.stdout.take().ok_or_else(|| {
+        let _ = stage1.kill();
+        let _ = stage1.wait();
+        std::io::Error::new(std::io::ErrorKind::Other, "Failed to capture stage1 stdout")
+    })?;
+
+    let stage1_stderr_pipe = stage1.stderr.take();
+    let stderr_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = stage1_stderr_pipe {
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let mut stage2 = match Command::new(stage2_prog)
+        .args(stage2_args)
+        .stdin(Stdio::from(stage1_stdout))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            let _ = stage1.kill();
+            let _ = stage1.wait();
+            let _ = stderr_thread.join();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to spawn {}: {}", stage2_prog, e),
+            ));
+        }
+    };
+
+    if let Some((output_file, progress_bar, poll_interval)) = progress {
+        loop {
+            match stage2.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if let Ok(meta) = fs::metadata(output_file) {
+                        progress_bar.set_position(meta.len());
+                    }
+                    thread::sleep(poll_interval);
+                }
+                Err(e) => {
+                    let _ = stage1.kill();
+                    let _ = stage1.wait();
+                    let _ = stderr_thread.join();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Error waiting for {}: {}", stage2_prog, e),
+                    ));
+                }
+            }
+        }
+        if let Ok(meta) = fs::metadata(output_file) {
+            progress_bar.set_position(meta.len());
+        }
+    }
+
+    let stage2_output = stage2.wait_with_output().map_err(|e| {
+        let _ = stage1.kill();
+        let _ = stage1.wait();
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to wait for {}: {}", stage2_prog, e),
+        )
+    })?;
+
+    let stage1_status = stage1.wait().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to wait for {}: {}", stage1_prog, e),
+        )
+    })?;
+
+    let mut combined_stderr = stderr_thread.join().unwrap_or_default();
+    combined_stderr.extend_from_slice(&stage2_output.stderr);
+
+    let final_status = if !stage2_output.status.success() {
+        stage2_output.status
+    } else if !stage1_status.success() {
+        stage1_status
+    } else {
+        stage2_output.status
+    };
+
+    Ok(Output {
+        status: final_status,
+        stdout: stage2_output.stdout,
+        stderr: combined_stderr,
+    })
 }
 
 /// Real system executor using std::process::Command.
@@ -225,6 +364,35 @@ impl CommandExecutor for RealSystem {
         }
         
         Ok(output)
+    }
+
+    fn run_pipeline<'a>(
+        &self,
+        stage1_prog: &str,
+        stage1_args: &[&'a str],
+        stage2_prog: &str,
+        stage2_args: &[&'a str],
+    ) -> std::io::Result<Output> {
+        execute_native_pipeline(stage1_prog, stage1_args, stage2_prog, stage2_args, None)
+    }
+
+    fn run_pipeline_with_file_progress<'a>(
+        &self,
+        stage1_prog: &str,
+        stage1_args: &[&'a str],
+        stage2_prog: &str,
+        stage2_args: &[&'a str],
+        output_file: &Path,
+        progress_bar: &ProgressBar,
+        poll_interval: Duration,
+    ) -> std::io::Result<Output> {
+        execute_native_pipeline(
+            stage1_prog,
+            stage1_args,
+            stage2_prog,
+            stage2_args,
+            Some((output_file, progress_bar, poll_interval)),
+        )
     }
 }
 

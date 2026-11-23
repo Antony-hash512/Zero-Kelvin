@@ -124,20 +124,25 @@ pub fn is_permission_denied(err: &ZkError) -> bool {
     }
 }
 
+fn current_executable_path() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(s) = exe.to_str() {
+            return s.to_string();
+        }
+    }
+    std::env::args().next().unwrap_or_default()
+}
+
 pub fn re_exec_with_runner(runner: &str) -> Result<(), ZkError> {
     use std::os::unix::process::CommandExt;
 
     let args: Vec<String> = std::env::args().collect();
-    // args[0] is the current binary path
-    let program = &args[0];
-    let cmd_args = &args[1..];
+    let program = current_executable_path();
+    let cmd_args = args.get(1..).unwrap_or(&[]);
 
-    // Construct command: runner program args...
-    // But Runner might be "sudo".
-    // We want: sudo /path/to/zks freeze ...
-
+    // Construct command: runner /abs/path/to/0k args...
     let err = std::process::Command::new(runner)
-        .arg(program)
+        .arg(&program)
         .args(cmd_args)
         .exec();
 
@@ -151,15 +156,11 @@ pub fn re_exec_with_runner(runner: &str) -> Result<(), ZkError> {
 pub fn re_exec_with_runner_custom_args(runner: &str, new_args: &[String]) -> Result<(), ZkError> {
     use std::os::unix::process::CommandExt;
 
-    // We assume the first argument (binary path) remains the same from env::args().
-    // We replace the rest with new_args.
-    
-    let current_args: Vec<String> = std::env::args().collect();
-    let program = &current_args[0];
+    let program = current_executable_path();
 
-    // Construct command: runner program new_args...
+    // Construct command: runner /abs/path/to/0k new_args...
     let err = std::process::Command::new(runner)
-        .arg(program)
+        .arg(&program)
         .args(new_args)
         .exec();
 
@@ -167,6 +168,38 @@ pub fn re_exec_with_runner_custom_args(runner: &str, new_args: &[String]) -> Res
         "Failed to re-execute with {} and custom args: {}",
         runner, err
     )))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    meta.is_file() && (meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Resolves a sibling binary (e.g. `0k-core`) located next to `exe_dir`.
+/// Falls back to bare `bin_name` (PATH lookup) if no executable sibling is found.
+pub fn resolve_sibling_binary_in(exe_dir: Option<&Path>, bin_name: &str) -> String {
+    let Some(dir) = exe_dir else {
+        return bin_name.to_string();
+    };
+    let candidate = dir.join(bin_name);
+    if is_executable_file(&candidate) {
+        if let Some(path_str) = candidate.to_str() {
+            return path_str.to_string();
+        }
+    }
+    bin_name.to_string()
+}
+
+/// Resolves a sibling binary located in the same directory as the currently running executable.
+/// Falls back to `bin_name` (standard PATH lookup) if not found next to the executable.
+pub fn resolve_sibling_binary(bin_name: &str) -> String {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    resolve_sibling_binary_in(exe_dir.as_deref(), bin_name)
 }
 
 // Helpers for testing (not exposed)
@@ -442,5 +475,42 @@ mod tests_expand {
     fn test_no_expand_relative() {
         let path = "Documents/file.txt";
         assert_eq!(expand_tilde(path), PathBuf::from(path));
+    }
+
+    #[test]
+    fn test_resolve_sibling_binary_finds_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let core_bin = dir.path().join("0k-core");
+        fs::write(&core_bin, "#!/bin/sh\n").unwrap();
+        let mut perms = fs::metadata(&core_bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&core_bin, perms).unwrap();
+
+        let resolved = resolve_sibling_binary_in(Some(dir.path()), "0k-core");
+        assert_eq!(resolved, core_bin.to_str().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_sibling_binary_ignores_non_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let core_bin = dir.path().join("0k-core");
+        fs::write(&core_bin, "not executable").unwrap();
+        let mut perms = fs::metadata(&core_bin).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&core_bin, perms).unwrap();
+
+        let resolved = resolve_sibling_binary_in(Some(dir.path()), "0k-core");
+        assert_eq!(resolved, "0k-core");
+    }
+
+    #[test]
+    fn test_resolve_sibling_binary_fallback_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(resolve_sibling_binary_in(Some(dir.path()), "0k-core"), "0k-core");
+        assert_eq!(resolve_sibling_binary_in(None, "0k-core"), "0k-core");
     }
 }

@@ -56,6 +56,15 @@ Currently in development. To build from source:
 cargo build --release
 ```
 
+To build fully static, portable Linux binaries (musl, no `glibc` dependency):
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+just dist-musl
+# Or directly:
+cargo build --profile release-static --locked --target x86_64-unknown-linux-musl
+```
+
 The build produces main binaries:
 - `0k`/`zero-kelvin`: The primary high-level orchestrator.
 - `0k-core`/`zero-kelvin-core`: Low-level tool for SquashFS and LUKS management.
@@ -185,6 +194,15 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 
 ```bash
 cargo build --release
+```
+
+Для сборки полностью статических переносимых бинарников (musl, без зависимости от `glibc`):
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+just dist-musl
+# Или напрямую:
+cargo build --profile release-static --locked --target x86_64-unknown-linux-musl
 ```
 
 В результате сборки создаются следующие бинарные файлы:

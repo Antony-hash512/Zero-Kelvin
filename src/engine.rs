@@ -298,9 +298,10 @@ pub fn check<E: CommandExecutor>(
     })?;
     let mount_point = mount_dir.path();
 
+    let core_bin = crate::utils::resolve_sibling_binary("0k-core");
     let status = executor
         .run_interactive(
-            "0k-core",
+            &core_bin,
             &[
                 "mount",
                 archive_path
@@ -320,15 +321,15 @@ pub fn check<E: CommandExecutor>(
     }
 
     // Ensure unmount
-    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
+    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path, &'a str);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
             if let Some(s) = self.1.to_str() {
-                let _ = self.0.run("0k-core", &["umount", s]);
+                let _ = self.0.run(self.2, &["umount", s]);
             }
         }
     }
-    let _guard = UnmountGuard(executor, mount_point);
+    let _guard = UnmountGuard(executor, mount_point, &core_bin);
 
     // 2. Read Manifest
     let manifest_path = mount_point.join("list.yaml");
@@ -701,9 +702,10 @@ pub fn unfreeze<E: CommandExecutor>(
     let mount_point = mount_dir.path();
 
     // 2. Mount Archive
+    let core_bin = crate::utils::resolve_sibling_binary("0k-core");
     let status = executor
         .run_interactive(
-            "0k-core",
+            &core_bin,
             &[
                 "mount",
                 archive_path
@@ -723,15 +725,15 @@ pub fn unfreeze<E: CommandExecutor>(
     }
 
     // Ensure we unmount even if errors occur later
-    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path);
+    struct UnmountGuard<'a, E: CommandExecutor>(&'a E, &'a Path, &'a str);
     impl<'a, E: CommandExecutor> Drop for UnmountGuard<'a, E> {
         fn drop(&mut self) {
             if let Some(s) = self.1.to_str() {
-                let _ = self.0.run("0k-core", &["umount", s]);
+                let _ = self.0.run(self.2, &["umount", s]);
             }
         }
     }
-    let _guard = UnmountGuard(executor, mount_point);
+    let _guard = UnmountGuard(executor, mount_point, &core_bin);
 
     // 2.1 Optional: Pre-flight verification (--verify flag)
     if options.verify {
@@ -1276,8 +1278,16 @@ fn generate_freeze_script(
     let payload_dir_quoted = shell_quote(&input_dir.display().to_string()); // INPUT: the payload directory with bind mounts
     let dest_quoted = shell_quote(&options.output.display().to_string()); // OUTPUT: standard destination
 
+    let core_bin_resolved = crate::utils::resolve_sibling_binary("0k-core");
+    let core_bin_cmd = if core_bin_resolved == "0k-core" {
+        core_bin_resolved
+    } else {
+        shell_quote(&core_bin_resolved)
+    };
+
     script.push_str(&format!(
-        "0k-core create {} {} {} {} {} {}\n",
+        "{} create {} {} {} {} {} {}\n",
+        core_bin_cmd,
         create_flags,
         progress_flag,
         tar_flags,

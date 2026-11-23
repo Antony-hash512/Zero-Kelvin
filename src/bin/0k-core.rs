@@ -334,10 +334,13 @@ impl CompressionMode {
         }
     }
 
-    fn get_tar2sqfs_compressor_flag(&self) -> Result<String, ZkError> {
+    fn get_tar2sqfs_compressor_args(&self) -> Result<&'static [&'static str], ZkError> {
         match self {
-            Self::None => Err(ZkError::CompressionError("Archive repacking does not support uncompressed mode (tar2sqfs limitation)".to_string())),
-            Self::Zstd(_) => Ok("-c zstd".to_string()),
+            Self::None => Err(ZkError::CompressionError(
+                "Archive repacking does not support uncompressed mode (tar2sqfs limitation)"
+                    .to_string(),
+            )),
+            Self::Zstd(_) => Ok(&["-c", "zstd"]),
         }
     }
 }
@@ -706,7 +709,7 @@ fn open_luks_container(
 
 struct DecompressorSpec {
     binary: &'static str,
-    command: &'static str,
+    args: &'static [&'static str],
     package_hint: &'static str,
     format_label: &'static str,
 }
@@ -716,49 +719,49 @@ fn resolve_decompressor(kind: &zero_kelvin::utils::ArchiveType) -> Option<Decomp
     match kind {
         ArchiveType::Tar => Some(DecompressorSpec {
             binary: "cat",
-            command: "cat",
+            args: &[],
             package_hint: "coreutils",
             format_label: "tar",
         }),
         ArchiveType::Gzip => Some(DecompressorSpec {
             binary: "gzip",
-            command: "gzip -dc",
+            args: &["-dc"],
             package_hint: "gzip",
             format_label: "gzip",
         }),
         ArchiveType::Bzip2 => Some(DecompressorSpec {
             binary: "bzip2",
-            command: "bzip2 -dc",
+            args: &["-dc"],
             package_hint: "bzip2",
             format_label: "bzip2",
         }),
         ArchiveType::Xz => Some(DecompressorSpec {
             binary: "xz",
-            command: "xz -dc",
+            args: &["-dc"],
             package_hint: "xz",
             format_label: "xz",
         }),
         ArchiveType::Zstd => Some(DecompressorSpec {
             binary: "zstd",
-            command: "zstd -dc",
+            args: &["-dc"],
             package_hint: "zstd",
             format_label: "zstd",
         }),
         ArchiveType::Zip => Some(DecompressorSpec {
             binary: "unzip",
-            command: "unzip -p",
+            args: &["-p"],
             package_hint: "unzip",
             format_label: "zip",
         }),
         ArchiveType::SevenZ => Some(DecompressorSpec {
             binary: "7z",
-            command: "7z x -so",
+            args: &["x", "-so"],
             package_hint: "7zip (or p7zip)",
             format_label: "7z",
         }),
         ArchiveType::Rar => Some(DecompressorSpec {
             binary: "unrar",
-            command: "unrar p -inul",
+            args: &["p", "-inul"],
             package_hint: "unrar",
             format_label: "rar",
         }),
@@ -805,7 +808,7 @@ fn repack_archive(
         ))
     })?;
 
-    // Verify optional tools before starting the transaction or shell pipeline
+    // Verify optional tools before starting the transaction or pipeline
     require_optional_tool(
         executor,
         "tar2sqfs",
@@ -819,21 +822,21 @@ fn repack_archive(
         spec.package_hint,
     )?;
 
-    // Determine compressor flag for tar2sqfs
-    let compressor_flag = comp_mode.get_tar2sqfs_compressor_flag()?;
+    // Determine compressor flags for tar2sqfs
+    let compressor_args = comp_mode.get_tar2sqfs_compressor_args()?;
 
-    // Construct pipeline: decompressor input | tar2sqfs options output
-    // SECURITY: all interpolated values are shell-quoted.
-    let cmd = format!(
-        "{decompressor} '{input}' | tar2sqfs --quiet --no-skip --force {flag} '{output}'",
-        decompressor = spec.command,
-        input = input_str.replace("'", "'\\''"),
-        flag = compressor_flag.replace("'", "'\\''"),
-        output = output_str.replace("'", "'\\''")
-    );
+    let mut stage1_args: Vec<&str> = spec.args.to_vec();
+    stage1_args.push(input_str);
+
+    let mut stage2_args: Vec<&str> = vec!["--quiet", "--no-skip", "--force"];
+    stage2_args.extend_from_slice(compressor_args);
+    stage2_args.push(output_str);
 
     if std::env::var("RUST_LOG").is_ok() {
-        eprintln!("DEBUG: Executing pipeline: {}", cmd);
+        eprintln!(
+            "DEBUG: Executing native pipeline: {} {:?} | tar2sqfs {:?}",
+            spec.binary, stage1_args, stage2_args
+        );
     }
 
     let input_size = fs::metadata(input_path).map(|m| m.len()).unwrap_or(0);
@@ -842,11 +845,8 @@ fn repack_archive(
     // Create transaction for cleanup on failure
     let mut transaction = CreateTransaction::new(output_path.to_path_buf());
 
-    // Use 'set -o pipefail' so that if decompressor fails, the whole pipeline fails
-    let full_cmd = format!("set -o pipefail; {}", cmd);
-
     if no_progress {
-        let output = executor.run("sh", &["-c", &full_cmd])?;
+        let output = executor.run_pipeline(spec.binary, &stage1_args, "tar2sqfs", &stage2_args)?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(ZkError::OperationFailed(format!(
@@ -869,9 +869,11 @@ fn repack_archive(
     pb.set_message("Repacking archive → SquashFS");
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    let output = executor.run_with_file_progress(
-        "sh",
-        &["-c", &full_cmd],
+    let output = executor.run_pipeline_with_file_progress(
+        spec.binary,
+        &stage1_args,
+        "tar2sqfs",
+        &stage2_args,
         output_path,
         &pb,
         Duration::from_millis(100),
@@ -2236,7 +2238,7 @@ mod tests {
         mode_none.apply_to_mksquashfs(&mut args);
         assert_eq!(args, vec!["-no-compression"]);
 
-        assert!(mode_none.get_tar2sqfs_compressor_flag().is_err());
+        assert!(mode_none.get_tar2sqfs_compressor_args().is_err());
 
         // Test Zstd
         let mode_zstd = CompressionMode::from_level(15);
@@ -2245,7 +2247,7 @@ mod tests {
         let mut args2 = vec![];
         mode_zstd.apply_to_mksquashfs(&mut args2);
         assert_eq!(args2, vec!["-comp", "zstd", "-Xcompression-level", "15"]);
-        assert_eq!(mode_zstd.get_tar2sqfs_compressor_flag().unwrap(), "-c zstd");
+        assert_eq!(mode_zstd.get_tar2sqfs_compressor_args().unwrap(), &["-c", "zstd"]);
     }
 
     #[test]
@@ -2329,32 +2331,35 @@ mod tests {
             .times(1)
             .returning(|_| true);
         
-        // 2. Expect pipeline execution
-        // We know `infer` + `get_file_type` should detect Gzip -> "gzip -dc"
-        // Compressor: default zstd -> "-c zstd"
-        // Cmd: "gzip -dc 'input.tar.gz' | tar2sqfs --quiet --no-skip --force -c zstd 'output.sqfs'"
-        
-        // input_size needed for progress bar?
-        // It calls metadata().len().
-        
-        // EXPECTATION:
-        mock.expect_run_with_file_progress()
-            .withf(move |program, args: &[&str], output_file: &Path, _, _| {
-                 program == "sh" &&
-                 args.len() == 2 &&
-                 args[0] == "-c" &&
-                 args[1].contains("gzip -dc") &&
-                 args[1].contains(&input_str) && // input path
-                 args[1].contains("tar2sqfs") &&
-                 args[1].contains("-c zstd") &&
-                 output_file.to_str().unwrap() == output_str
-            })
+        // 2. Expect native pipeline execution (no shell, portable across dash/sh/busybox)
+        // `infer` + `get_file_type` detects Gzip -> stage1: gzip -dc <input>
+        // stage2: tar2sqfs --quiet --no-skip --force -c zstd <output>
+        mock.expect_run_pipeline_with_file_progress()
+            .withf(
+                move |s1_prog, s1_args: &[&str], s2_prog, s2_args: &[&str], output_file: &Path, _, _| {
+                    s1_prog == "gzip"
+                        && s1_args == &["-dc", input_str.as_str()]
+                        && s2_prog == "tar2sqfs"
+                        && s2_args
+                            == &[
+                                "--quiet",
+                                "--no-skip",
+                                "--force",
+                                "-c",
+                                "zstd",
+                                output_str.as_str(),
+                            ]
+                        && output_file.to_str().unwrap() == output_str
+                },
+            )
             .times(1)
-            .returning(|_, _, _, _, _| Ok(Output {
-                 status: std::process::ExitStatus::from_raw(0),
-                 stdout: vec![],
-                 stderr: vec![],
-            }));
+            .returning(|_, _, _, _, _, _, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
 
         let args = Args {
             command: Commands::Create {
@@ -2370,6 +2375,78 @@ mod tests {
             },
         };
         
+        run(args, &mock).unwrap();
+    }
+
+    #[test]
+    fn test_repack_archive_no_progress_uses_native_pipeline() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_tar = temp_dir.path().join("input.tar");
+        let output_sqfs = temp_dir.path().join("output.sqfs");
+
+        let content_file = temp_dir.path().join("content.txt");
+        fs::write(&content_file, "hello").unwrap();
+
+        let status = std::process::Command::new("tar")
+            .arg("-cf")
+            .arg(&input_tar)
+            .arg("-C")
+            .arg(temp_dir.path())
+            .arg("content.txt")
+            .status()
+            .expect("Failed to run tar for test setup");
+        assert!(status.success());
+
+        let input_str = input_tar.to_str().unwrap().to_string();
+        let output_str = output_sqfs.to_str().unwrap().to_string();
+
+        let mut mock = MockCommandExecutor::new();
+        mock.expect_command_exists()
+            .withf(|tool| tool == "tar2sqfs")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_command_exists()
+            .withf(|tool| tool == "cat")
+            .times(1)
+            .returning(|_| true);
+        mock.expect_run_pipeline()
+            .withf(move |s1_prog, s1_args: &[&str], s2_prog, s2_args: &[&str]| {
+                s1_prog == "cat"
+                    && s1_args == &[input_str.as_str()]
+                    && s2_prog == "tar2sqfs"
+                    && s2_args
+                        == &[
+                            "--quiet",
+                            "--no-skip",
+                            "--force",
+                            "-c",
+                            "zstd",
+                            output_str.as_str(),
+                        ]
+            })
+            .times(1)
+            .returning(|_, _, _, _| {
+                Ok(Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: vec![],
+                    stderr: vec![],
+                })
+            });
+
+        let args = Args {
+            command: Commands::Create {
+                input_path: input_tar,
+                output_path: Some(output_sqfs),
+                encrypt: false,
+                compression: DEFAULT_ZSTD_COMPRESSION,
+                no_progress: true,
+                vanilla_progress: false,
+                alfa_progress: false,
+                overwrite_files: false,
+                overwrite_luks_content: false,
+            },
+        };
+
         run(args, &mock).unwrap();
     }
 
@@ -2397,9 +2474,10 @@ mod tests {
             .withf(|tool| tool == "tar2sqfs")
             .times(1)
             .returning(|_| false);
-        // Must not attempt to execute the shell pipeline when tar2sqfs is absent
+        // Must not attempt to execute any pipeline when tar2sqfs is absent
         mock.expect_run().times(0);
-        mock.expect_run_with_file_progress().times(0);
+        mock.expect_run_pipeline().times(0);
+        mock.expect_run_pipeline_with_file_progress().times(0);
 
         let args = Args {
             command: Commands::Create {
@@ -2461,7 +2539,8 @@ mod tests {
             .times(1)
             .returning(|_| false);
         mock.expect_run().times(0);
-        mock.expect_run_with_file_progress().times(0);
+        mock.expect_run_pipeline().times(0);
+        mock.expect_run_pipeline_with_file_progress().times(0);
 
         let args = Args {
             command: Commands::Create {
