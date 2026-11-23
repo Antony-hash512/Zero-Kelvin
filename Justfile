@@ -101,10 +101,15 @@ verify-musl:
         echo "OK: $bin is fully statically linked ($(du -h "$path" | cut -f1))"
     done
 
-# Прогнать unit-тесты и интеграционные BATS-тесты на musl-сборке
+# Прогнать unit-тесты и интеграционные BATS-тесты на musl-сборке (без root)
 test-musl: build-musl verify-musl
     cargo test --locked --target x86_64-unknown-linux-musl --features testing
     fish tests/run_shell_tests.fish --musl --no-root
+
+# Прогнать unit-тесты и ВСЕ интеграционные BATS-тесты (включая LUKS с интерактивным sudo) на musl-сборке
+test-musl-root: build-musl verify-musl
+    cargo test --locked --target x86_64-unknown-linux-musl --features testing
+    fish tests/run_shell_tests.fish --musl --with-root
 
 # Упаковать переносимый релизный архив (.tar.gz + SHA256SUMS) в dist/
 dist-musl: build-musl verify-musl

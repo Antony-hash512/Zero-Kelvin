@@ -1,7 +1,7 @@
 #!/usr/bin/env fish
 
 # --- ШАГ 0: Парсинг аргументов ---
-argparse 'build' 'no-build' 'build-release' 'no-build-release' 'musl' 'build-musl' 'no-root' -- $argv
+argparse 'build' 'no-build' 'build-release' 'no-build-release' 'musl' 'build-musl' 'no-root' 'with-root' -- $argv
 or exit 1
 
 if set -q _flag_musl; or set -q _flag_build_musl
@@ -19,10 +19,26 @@ end
 set -x SKIP_ROOT "1"
 set -x ROOT_CMD ""
 
-if set -q _flag_build_release; or set -q _flag_no_build_release; or set -q _flag_musl; or set -q _flag_build_musl
-    echo "Release/musl mode: Root tests disabled for safety."
-else if set -q _flag_no_root
+if set -q _flag_no_root
     echo "Flag --no-root detected: Root tests DISABLED."
+else if set -q _flag_with_root
+    if test (id -u) -eq 0
+        echo "Running as Root (--with-root): Root tests ENABLED."
+        set -x SKIP_ROOT "0"
+        set -x ROOT_CMD ""
+    else
+        echo "Flag --with-root detected: authenticating sudo for LUKS/root tests..."
+        if sudo -v
+            echo "Sudo authenticated: Root tests ENABLED."
+            set -x SKIP_ROOT "0"
+            set -x ROOT_CMD "sudo"
+        else
+            echo "Sudo authentication failed!"
+            exit 1
+        end
+    end
+else if set -q _flag_build_release; or set -q _flag_no_build_release; or set -q _flag_musl; or set -q _flag_build_musl
+    echo "Release/musl mode: Root tests disabled for safety (pass --with-root to enable)."
 else if test (id -u) -eq 0
     echo "Running as Root: Root tests ENABLED."
     set -x SKIP_ROOT "0"
