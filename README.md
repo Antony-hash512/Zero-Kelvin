@@ -111,6 +111,34 @@ just dist-musl
 cargo build --profile release-static --locked --target x86_64-unknown-linux-musl
 ```
 
+#### Build Dependencies for Static `musl` Binaries (`x86_64` & `ARM64`)
+
+Common prerequisites: `rustup` / `cargo`, plus `binutils` (`readelf`), `file`, and `just` (for `just verify-musl` / `just dist-musl`).
+
+- **`x86_64` (`x86_64-unknown-linux-musl`):**
+  - **Arch Linux:** `sudo pacman -S musl binutils file just`
+  - **Debian / Ubuntu:** `sudo apt install musl-tools binutils file` *(and `just` via `apt` or `cargo install just`)*
+  - **Fedora:** `sudo dnf install musl-gcc musl-libc-static binutils file just`
+  - **Alpine Linux:** `sudo apk add build-base binutils file just` *(already musl-native)*
+  ```bash
+  rustup target add x86_64-unknown-linux-musl
+  just dist-musl
+  ```
+
+- **`ARM64` (`aarch64-unknown-linux-musl`, cross-compiling from `x86_64` via `zig`):**
+  `zig` bundles an LLVM cross-linker and `musl` libraries for ARM64, avoiding manual cross-GCC toolchains or Docker.
+  - Install `zig`:
+    - **Arch Linux:** `sudo pacman -S zig`
+    - **Fedora:** `sudo dnf install zig`
+    - **Other distros:** install from [ziglang.org/download](https://ziglang.org/download/)
+  - Add the target, install `cargo-zigbuild`, and build:
+    ```bash
+    rustup target add aarch64-unknown-linux-musl
+    cargo install cargo-zigbuild
+    cargo zigbuild --profile release-static --locked --target aarch64-unknown-linux-musl
+    ```
+  *(Alternative without `zig`: use `cross` with Docker — `cross build --profile release-static --locked --target aarch64-unknown-linux-musl`.)*
+
 The build produces main binaries:
 - `0k`/`zero-kelvin`: The primary high-level orchestrator.
 - `0k-core`/`zero-kelvin-core`: Low-level tool for SquashFS and LUKS management.
@@ -296,6 +324,34 @@ just dist-musl
 # Или напрямую:
 cargo build --profile release-static --locked --target x86_64-unknown-linux-musl
 ```
+
+#### Зависимости для статической `musl`-сборки (`x86_64` и `ARM64`)
+
+Общие требования: `rustup` / `cargo`, а также `binutils` (`readelf`), `file` и `just` (для рецептов `just verify-musl` / `just dist-musl`).
+
+- **`x86_64` (`x86_64-unknown-linux-musl`):**
+  - **Arch Linux:** `sudo pacman -S musl binutils file just`
+  - **Debian / Ubuntu:** `sudo apt install musl-tools binutils file` *(и `just` через `apt` или `cargo install just`)*
+  - **Fedora:** `sudo dnf install musl-gcc musl-libc-static binutils file just`
+  - **Alpine Linux:** `sudo apk add build-base binutils file just` *(система уже на `musl`)*
+  ```bash
+  rustup target add x86_64-unknown-linux-musl
+  just dist-musl
+  ```
+
+- **`ARM64` (`aarch64-unknown-linux-musl`, кросс-сборка с `x86_64` через `zig`):**
+  В `zig` уже встроены кросс-линковщик LLVM и библиотеки `musl` под ARM64 — не нужно отдельно собирать `aarch64-linux-musl-gcc` или поднимать Docker.
+  - Установите `zig`:
+    - **Arch Linux:** `sudo pacman -S zig`
+    - **Fedora:** `sudo dnf install zig`
+    - **Другие дистрибутивы:** скачать с [ziglang.org/download](https://ziglang.org/download/)
+  - Добавьте таргет, установите `cargo-zigbuild` и выполните сборку:
+    ```bash
+    rustup target add aarch64-unknown-linux-musl
+    cargo install cargo-zigbuild
+    cargo zigbuild --profile release-static --locked --target aarch64-unknown-linux-musl
+    ```
+  *(Альтернатива без `zig`: использовать `cross` + Docker — `cross build --profile release-static --locked --target aarch64-unknown-linux-musl`.)*
 
 В результате сборки создаются следующие бинарные файлы:
 - `0k`/`zero-kelvin`: Основной высокоуровневый оркестратор.
