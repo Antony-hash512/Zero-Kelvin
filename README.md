@@ -16,8 +16,54 @@ A Rust port of the `zero-kelvin-store` function set (originally written for Fish
 ### ⚙️ System Requirements
 
 *   **Linux Kernel:** 5.10+ (for `unshare` and `user namespace` features)
-*   **Essential Tools:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`
+*   **Essential Tools:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount3` (or `fusermount`), `util-linux` (`unshare`, `mount`, `umount`, `findmnt`)
 *   **Optional Tools:** `tar2sqfs` (`squashfs-tools-ng`, for repacking `.tar`/compressed archives directly into SquashFS), <!--`rclone` (for `--direct-rclone` streaming), this flag is not implemented yet--> `sudo`, `doas`, `sudo-rs`, `pkexec`, `run0`, `pleaser` (alternative privilege escalators)
+
+#### Runtime Packages for the Static `musl` Build
+The static `musl` binaries (`0k`, `0k-core`, `0k-safe-rm`) have **zero `glibc`/shared-library dependencies** and run on any modern Linux distro, but they still orchestrate the standard system CLI tools listed above. Install them via your distribution's package manager:
+
+- **Debian / Ubuntu / Linux Mint / Tails / Qubes (Debian template):**
+  ```bash
+  sudo apt update && sudo apt install squashfs-tools squashfuse fuse3 cryptsetup-bin rsync util-linux
+  # Optional (for repacking .tar / compressed archives via tar2sqfs):
+  sudo apt install squashfs-tools-ng
+  ```
+  > **Note for Tails:** Both `squashfs-tools` and `squashfuse` need to be installed manually (e.g. `sudo apt update && sudo apt install squashfs-tools squashfuse`); the remaining tools (`cryptsetup-bin`, `rsync`, `util-linux`, `fuse3`) are usually already present.
+
+- **Fedora / RHEL / Rocky / AlmaLinux / Qubes (Fedora template):**
+  ```bash
+  sudo dnf install squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Optional (tar2sqfs):
+  sudo dnf install squashfs-tools-ng
+  ```
+
+- **Arch Linux / Manjaro / EndeavourOS:**
+  ```bash
+  sudo pacman -S squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Optional (tar2sqfs):
+  sudo pacman -S squashfs-tools-ng
+  ```
+
+- **openSUSE (Tumbleweed / Leap):**
+  ```bash
+  sudo zypper install squashfs squashfuse fuse3 cryptsetup rsync util-linux
+  # Optional (tar2sqfs):
+  sudo zypper install squashfs-tools-ng
+  ```
+
+- **Alpine Linux:**
+  ```bash
+  sudo apk add squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux util-linux-misc
+  # Optional (tar2sqfs, requires community repo):
+  sudo apk add squashfs-tools-ng
+  ```
+
+- **Void Linux:**
+  ```bash
+  sudo xbps-install -S squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Optional (tar2sqfs):
+  sudo xbps-install -S squashfs-tools-ng
+  ```
 
 
 ---
@@ -159,8 +205,54 @@ This project uses a dual licensing model: code is under the **GPLv3 License**, a
 ### ⚙️ Системные требования
 
 *   **Ядро Linux:** 5.10+ (для функций `unshare` и `user namespace`)
-*   **Основные утилиты:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount`, `which`
+*   **Основные утилиты:** `mksquashfs`, `unsquashfs`, `squashfuse`, `cryptsetup`, `rsync`, `fusermount3` (или `fusermount`), `util-linux` (`unshare`, `mount`, `umount`, `findmnt`)
 *   **Дополнительные утилиты:** `tar2sqfs` (`squashfs-tools-ng`, для прямой перепаковки `.tar` и сжатых архивов в SquashFS), <!--`rclone` (для потоковой передачи `--direct-rclone`), эта опция еще не реализована--> `sudo`, `doas`, `sudo-rs`, `pkexec`, `run0`, `pleaser` (альтернативные эскалаторы привилегий)
+
+#### Какие пакеты установить для работы статической `musl`-сборки
+Статические `musl`-бинарники (`0k`, `0k-core`, `0k-safe-rm`) **не зависят от `glibc` и системных `.so`-библиотек** и запускаются на любом современном дистрибутиве Linux, но для своей работы вызывают перечисленные выше системные CLI-утилиты. Установите их через пакетный менеджер вашего дистрибутива:
+
+- **Debian / Ubuntu / Linux Mint / Tails / Qubes (шаблон Debian):**
+  ```bash
+  sudo apt update && sudo apt install squashfs-tools squashfuse fuse3 cryptsetup-bin rsync util-linux
+  # Опционально (для перепаковки .tar и сжатых архивов через tar2sqfs):
+  sudo apt install squashfs-tools-ng
+  ```
+  > **Примечание для Tails:** оба пакета `squashfs-tools` и `squashfuse` нужно устанавливать вручную (`sudo apt update && sudo apt install squashfs-tools squashfuse`); остальные базовые утилиты (`cryptsetup-bin`, `rsync`, `util-linux`, `fuse3`) обычно уже предустановлены.
+
+- **Fedora / RHEL / Rocky / AlmaLinux / Qubes (шаблон Fedora):**
+  ```bash
+  sudo dnf install squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Опционально (tar2sqfs):
+  sudo dnf install squashfs-tools-ng
+  ```
+
+- **Arch Linux / Manjaro / EndeavourOS:**
+  ```bash
+  sudo pacman -S squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Опционально (tar2sqfs):
+  sudo pacman -S squashfs-tools-ng
+  ```
+
+- **openSUSE (Tumbleweed / Leap):**
+  ```bash
+  sudo zypper install squashfs squashfuse fuse3 cryptsetup rsync util-linux
+  # Опционально (tar2sqfs):
+  sudo zypper install squashfs-tools-ng
+  ```
+
+- **Alpine Linux:**
+  ```bash
+  sudo apk add squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux util-linux-misc
+  # Опционально (tar2sqfs, требуется репозиторий community):
+  sudo apk add squashfs-tools-ng
+  ```
+
+- **Void Linux:**
+  ```bash
+  sudo xbps-install -S squashfs-tools squashfuse fuse3 cryptsetup rsync util-linux
+  # Опционально (tar2sqfs):
+  sudo xbps-install -S squashfs-tools-ng
+  ```
 
 ---
 
